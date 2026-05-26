@@ -165,11 +165,6 @@ if [[ -f /opt/ros/humble/setup.zsh ]]; then
   source /opt/ros/humble/setup.zsh
 fi
 
-# 如果你有自己的工作空间，也可以按需加：
-# if [[ -f "$HOME/ros2_ws/install/setup.zsh" ]]; then
-#   source "$HOME/ros2_ws/install/setup.zsh"
-# fi
-
 # ---------------------------------------------------------
 # Conda
 # ---------------------------------------------------------
@@ -191,28 +186,54 @@ fi
 unset __conda_setup
 
 # ---------------------------------------------------------
-# zoxide
+# 外部工具集成与现代化工具接管 (Zoxide, fzf 等)
 # ---------------------------------------------------------
 
-command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh)"
+# zoxide 智能接管 cd
+if command -v zoxide >/dev/null 2>&1; then
+  eval "$(zoxide init zsh --cmd cd)"
+fi
 
-# ---------------------------------------------------------
 # fzf
-# ---------------------------------------------------------
-
 [[ -f "$HOME/.fzf.zsh" ]] && source "$HOME/.fzf.zsh"
 [[ -f "$ZDOTDIR/.fzf.zsh" ]] && source "$ZDOTDIR/.fzf.zsh"
 
 # ---------------------------------------------------------
-# Alias
+# Alias & 现代命令替换
 # ---------------------------------------------------------
 
 alias ..='cd ..'
 alias ...='cd ../..'
-alias l='ls -al'
-alias ll='ls -alFh'
-alias lt='ls -ltrh'
 alias cls='clear'
+
+# eza 智能接管 ls
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --icons=always --color=always --group-directories-first'
+  alias l='eza -al --icons=always --color=always --group-directories-first'
+  alias ll='eza -alFh --icons=always --color=always --group-directories-first'
+  alias lt='eza -al --sort=modified --icons=always --color=always --group-directories-first'
+else
+  alias l='ls -al'
+  alias ll='ls -alFh'
+  alias lt='ls -ltrh'
+fi
+
+# fd 智能接管 find
+if command -v fd >/dev/null 2>&1; then
+  alias find='fd'
+fi
+
+# bat 智能接管 cat (兼容 Ubuntu apt 安装的 batcat)
+if command -v batcat >/dev/null 2>&1; then
+  alias cat='batcat --style=plain --paging=never'
+elif command -v bat >/dev/null 2>&1; then
+  alias cat='bat --style=plain --paging=never'
+fi
+
+# ripgrep 智能接管 grep
+if command -v rg >/dev/null 2>&1; then
+  alias grep='rg --color=auto'
+fi
 
 # tmux
 alias tm='tmux'
@@ -252,13 +273,15 @@ alias uadd='uv add'
 alias usync='uv sync'
 
 # ---------------------------------------------------------
-# 最终整理 PATH（防止上面 path 更新未导出）, 以及其他命令汇总
+# 最终整理 PATH
 # ---------------------------------------------------------
 
 export PATH=${(j.:.)path}
 
 # uv 安装配置
-. "$HOME/.local/share/../bin/env"
+if [[ -f "$HOME/.local/share/../bin/env" ]]; then
+  . "$HOME/.local/share/../bin/env"
+fi
 
 # opencode
 export PATH=/home/kun24/.opencode/bin:$PATH
