@@ -1,0 +1,17 @@
+[user]
+	name = kun
+	email = 2052387295@qq.com
+
+# 设置默认的主分支名为 main
+[init]
+	defaultBranch = main
+
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+
+[safe]
+	directory = /opt/homebrew/Homebrew/Library/Taps/homebrew/homebrew-core
+	directory = /opt/homebrew/Homebrew/Library/Taps/homebrew/homebrew-cask

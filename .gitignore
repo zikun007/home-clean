@@ -1,0 +1,15 @@
+.DS_Store
+*.log
+*.history
+
+# pi agent 运行时产物（含 API Key 与会话数据，不入库）
+.pi/agent/auth.json
+.pi/agent/mcp-auth.json
+.pi/agent/models-store.json
+.pi/agent/sessions/
+
+.config/zsh/.zsh_sessions
+.config/zsh/.zcompdump*
+
+.cache/*
+.local/state/*.log
