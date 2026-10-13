@@ -13,3 +13,13 @@
 
 .cache/*
 .local/state/*.log
+
+# .local/share 仅维护 zsh 历史与字体；其余为运行时文件，不入库
+.local/share/*
+!.local/share/zsh/
+!.local/share/fonts/
+.local/share/recently-used.xbel
+
+# 运行时生成的编译缓存与 fontconfig 标识
+*.zwc
+.config/fonts/.uuid

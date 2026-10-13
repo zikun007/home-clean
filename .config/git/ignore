@@ -92,3 +92,4 @@ ENV/
 # 各种性能分析或崩溃产生的 core dump
 core
 core.*
+**/.claude/settings.local.json

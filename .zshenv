@@ -7,19 +7,19 @@
 export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share"
-export XDG_STATE_HOME="$HOME/.local/state"
 
 # Zsh 配置目录
 export ZDOTDIR="$XDG_CONFIG_HOME/zsh"
+
+# Vim（8.2 无原生 XDG 支持，用 VIMINIT 指向 XDG 路径；vim 9.1+ 可删掉这行）
+export VIMINIT='let $MYVIMRC="$XDG_CONFIG_HOME/vim/vimrc" | source $MYVIMRC'
 
 # 创建基础目录
 typeset -gU _xdg_dirs=(
   "$XDG_CONFIG_HOME"
   "$XDG_CACHE_HOME"
   "$XDG_DATA_HOME"
-  "$XDG_STATE_HOME"
   "$XDG_DATA_HOME/zsh"
-  "$XDG_STATE_HOME/zsh"
   "$XDG_CACHE_HOME/zsh"
 )
 

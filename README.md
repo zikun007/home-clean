@@ -14,7 +14,7 @@
 ## 🌟 核心特性 (Key Features)
 
 - **跨平台自适应:** `setup.sh` 自动检测操作系统——Ubuntu 使用 `apt`，macOS 使用 `Homebrew`；`.zshrc` 中通过 `IS_MACOS` / `IS_LINUX` 自动切换平台专属配置（Homebrew、CUDA、ROS2 等），一套配置走天下。
-- **一键部署 (One-Click Setup):** 自动安装必备软件（Zsh, Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop 等），处理极客字体与中文字体，并完成软链接映射。
+- **一键部署 (One-Click Setup):** 自动安装必备软件（Zsh, Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop 等），部署字体到 ~/.local/share/fonts，并完成 .config 软链映射与 .local 数据复制。
 - **高效 Shell 体验:** 基于 Zsh + Oh My Zsh，预装语法高亮、自动建议补全、fzf-tab 与 Vi Mode，配合 `zoxide` 实现目录秒级智能跳转。
 - **现代终端工具链:** 自动用 `eza` 接管 `ls`、`fd` 接管 `find`、`bat` 接管 `cat`、`rg` 接管 `grep`、`btop` 接管 `top`，并兼容 Ubuntu 打包名（`fdfind` / `batcat`）。
 - **终端复用:** 精心配置的 Tmux 方案，支持鼠标操作、一键分屏及会话保持，极大提升远程调试效率。
@@ -28,14 +28,14 @@ home-clean/
 ├── LICENSE
 ├── README.md
 ├── README_en.md
-├── .config/            # 存放应用核心配置（XDG 规范布局）
-│   ├── fonts/           # 终端字体 (FiraCode Nerd Font、宋体)
+├── .config/            # 存放应用核心配置（XDG 规范布局，软链到 ~/.config）
 │   ├── git/             # git 详细配置
 │   ├── tmux/            # Tmux 详细配置与插件
 │   ├── vim/             # Vim 纯净版配置
 │   └── zsh/             # Zsh 主题、Oh My Zsh 与插件
-├── .local/              # 存放本地数据与状态
-│   └── share/zsh/
+├── .local/              # 存放本地数据与资产（复制到 ~/.local，不覆盖已有内容）
+│   ├── share/fonts/     # 终端字体 (FiraCode Nerd Font、宋体)
+│   └── share/zsh/       # zsh 历史
 ├── .zshenv              # Zsh 环境变量入口
 └── setup.sh             # 跨平台部署与安装脚本
 ```

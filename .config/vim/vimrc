@@ -42,11 +42,7 @@ set helplang=cn,en
 " termencoding 通常保持默认即可，不必强设
 
 " ================= Clipboard =================
-if has('unnamedplus')
-    set clipboard+=unnamedplus
-else
-    set clipboard+=unnamed
-endif
+set clipboard+=unnamedplus
 
 " ================= UI / Theme =================
 set background=dark

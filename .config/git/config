@@ -6,6 +6,10 @@
 [init]
 	defaultBranch = main
 
+# 默认编辑器
+[core]
+	editor = vim
+
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f

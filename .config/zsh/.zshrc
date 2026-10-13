@@ -1,27 +1,10 @@
 # =========================================================
 # ~/.config/zsh/.zshrc
-# 跨平台配置：自动适配 Ubuntu Linux 与 macOS (Apple Silicon)
+# Optimized for WSL
 # =========================================================
 
 # ---------------------------------------------------------
-# 0. 系统检测
-# ---------------------------------------------------------
-
-case "$(uname -s)" in
-  Darwin) IS_MACOS=1 ;;
-  Linux)  IS_LINUX=1 ;;
-esac
-
-# ---------------------------------------------------------
-# 1. Powerlevel10k instant prompt (必须在最前面)
-# ---------------------------------------------------------
-
-if [[ -r "$XDG_CACHE_HOME/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-  source "$XDG_CACHE_HOME/p10k-instant-prompt-${(%):-%n}.zsh"
-fi
-
-# ---------------------------------------------------------
-# 2. 基础目录 / 缓存 / 历史
+# 基础目录 / 缓存 / 历史
 # ---------------------------------------------------------
 
 export ZSH="$XDG_CONFIG_HOME/zsh/oh-my-zsh"
@@ -47,7 +30,7 @@ mkdir -p \
 export DISABLE_AUTO_TITLE=true
 
 # ---------------------------------------------------------
-# 3. 历史记录优化
+# 历史记录优化
 # ---------------------------------------------------------
 
 HIST_STAMPS="yyyy-mm-dd"
@@ -62,7 +45,20 @@ setopt HIST_REDUCE_BLANKS
 setopt HIST_IGNORE_SPACE
 
 # ---------------------------------------------------------
-# 4. PATH 与平台专属环境
+# 补全优化
+# ---------------------------------------------------------
+
+zstyle ':completion:*' use-cache on
+zstyle ':completion:*' cache-path "$XDG_CACHE_HOME/zsh/zcompcache"
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-z}={A-Z}' 'r:|[._-]=* r:|=*' 'l:|=* r:|=*'
+
+# 自动纠错
+#setopt CORRECT
+#setopt CORRECT_ALL
+
+# ---------------------------------------------------------
+# PATH
 # ---------------------------------------------------------
 
 typeset -U path
@@ -74,78 +70,67 @@ path=(
   $path
 )
 
-# uv 用户级路径兜底
+# uv / pip 用户级路径兜底
 [[ -d "$HOME/.local/share/uv/tools" ]] && path=("$HOME/.local/share/uv/tools" $path)
 
 # Conda 路径兜底
 [[ -d "$HOME/miniconda3/bin" ]] && path=("$HOME/miniconda3/bin" $path)
 [[ -d "/opt/miniconda3/bin" ]] && path=("/opt/miniconda3/bin" $path)
 
-if [[ -n "$IS_MACOS" ]]; then
-  # ---- macOS: Homebrew (Apple Silicon) ----
-  export HOMEBREW_PREFIX="/opt/homebrew"
-  export HOMEBREW_PIP_INDEX_URL="https://pypi.mirrors.ustc.edu.cn/simple"
-  export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
-  export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
-
-  if [[ -d "$HOMEBREW_PREFIX/bin" ]]; then
-    path=("$HOMEBREW_PREFIX/bin" "$HOMEBREW_PREFIX/sbin" $path)
-
-    # 编译相关环境变量 (C++)
-    export CPATH="$HOMEBREW_PREFIX/include${CPATH:+:$CPATH}"
-    export LIBRARY_PATH="$HOMEBREW_PREFIX/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-  fi
-
-  # VS Code CLI
-  [[ -d "/Applications/Visual Studio Code.app/Contents/Resources/app/bin" ]] && \
-    path=("/Applications/Visual Studio Code.app/Contents/Resources/app/bin" $path)
-else
-  # ---- Linux: CUDA ----
-  export CUDA_HOME=/usr/local/cuda
-  if [[ -d "$CUDA_HOME/bin" ]]; then
-    path=("$CUDA_HOME/bin" $path)
-  fi
-  if [[ -d "$CUDA_HOME/lib64" ]]; then
-    export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  fi
-fi
-
 export PATH=${(j.:.)path}
 
 # ---------------------------------------------------------
-# 5. 开发环境变量
+# 开发环境变量
 # ---------------------------------------------------------
 
-# Vim / Neovim
-export VIMINIT='let $MYVIMRC="$XDG_CONFIG_HOME/vim/.vimrc" | source $MYVIMRC'
-export VIMDOTDIR="$XDG_CONFIG_HOME/vim"
+# ---------------------------------------------------------
+# nvm —— 惰性加载：首次调用 nvm/node/npm 等命令时才真正加载 nvm.sh
+# 默认版本 bin 目录直接注入 PATH，node/npm 立即可用；--no-use 跳过 nvm_auto 自动切换
+# ---------------------------------------------------------
 
-# Python
-export PIP_CONFIG_FILE="$XDG_CONFIG_HOME/pip/pip.conf"
-export IPYTHONDIR="$XDG_CONFIG_HOME/ipython"
-
-# nvm (Node.js 版本管理，仅在安装时加载)
 export NVM_DIR="$HOME/.config/nvm"
-[[ -s "$NVM_DIR/nvm.sh" ]] && \. "$NVM_DIR/nvm.sh"
 export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 
-# Conan
-export CONAN_HOME="$XDG_CONFIG_HOME/conan"
+_nvm_default_bin="$NVM_DIR/versions/node/v24.21.0/bin"
+[[ -d "$_nvm_default_bin" ]] && path=("$_nvm_default_bin" $path)
+unset _nvm_default_bin
+
+_nvm_lazy() {
+  unset -f nvm node npm npx pnpm yarn corepack
+  [[ -s "$NVM_DIR/nvm.sh" ]] && \source "$NVM_DIR/nvm.sh" --no-use
+  [[ -s "$NVM_DIR/bash_completion" ]] && \source "$NVM_DIR/bash_completion"
+}
+for _cmd in nvm node npm npx pnpm yarn corepack; do
+  eval "${_cmd}() { _nvm_lazy; ${_cmd} \$@; }"
+done
+unset _cmd
+
+
+# CUDA
+export CUDA_HOME=/usr/local/cuda
+if [[ -d "$CUDA_HOME/bin" ]]; then
+  path=("$CUDA_HOME/bin" $path)
+fi
+if [[ -d "$CUDA_HOME/lib64" ]]; then
+  export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 # ---------------------------------------------------------
-# 6. Oh My Zsh 核心与插件
+# Powerlevel10k instant prompt
+# 尽量靠前，避免后面插件影响首屏速度
+# ---------------------------------------------------------
+
+if [[ -r "$XDG_CACHE_HOME/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "$XDG_CACHE_HOME/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+# ---------------------------------------------------------
+# Oh My Zsh
 # ---------------------------------------------------------
 
 ZSH_THEME="powerlevel10k/powerlevel10k"
 DISABLE_AUTO_UPDATE=true
 ZSH_COMPDUMP="$ZSH_CACHE_DIR/.zcompdump-$HOST"
-
-# 补全样式设置（compinit 交给 Oh My Zsh 处理）
-zstyle ':completion:*' use-cache on
-zstyle ':completion:*' cache-path "$XDG_CACHE_HOME/zsh/zcompcache"
-zstyle ':completion:*' menu select
-zstyle ':completion:*' matcher-list 'm:{a-z}={A-Z}' 'r:|[._-]=* r:|=*' 'l:|=* r:|=*'
-zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
 
 plugins=(
   git
@@ -161,10 +146,9 @@ source "$ZSH/oh-my-zsh.sh"
 [[ -f "$ZDOTDIR/.p10k.zsh" ]] && source "$ZDOTDIR/.p10k.zsh"
 
 # ---------------------------------------------------------
-# 7. 插件深度配置 (Vi Mode / Fzf / Zoxide)
+# Zsh vi mode
 # ---------------------------------------------------------
 
-# Zsh vi mode
 ZVM_VI_INSERT_ESCAPE_BINDKEY=jk
 ZVM_KEYTIMEOUT=0.3
 
@@ -181,17 +165,9 @@ function zvm_after_init() {
   zvm_bindkey visual 'L' end-of-line
 }
 
-# zoxide 智能接管 cd
-if command -v zoxide >/dev/null 2>&1; then
-  eval "$(zoxide init zsh --cmd cd)"
-fi
-
-# fzf
-[[ -f "$HOME/.fzf.zsh" ]] && source "$HOME/.fzf.zsh"
-[[ -f "$ZDOTDIR/.fzf.zsh" ]] && source "$ZDOTDIR/.fzf.zsh"
-
 # ---------------------------------------------------------
-# 8. ROS2 Humble（只在存在时加载，避免报错）
+# ROS2 Humble
+# 只在存在时加载，避免报错
 # ---------------------------------------------------------
 
 if [[ -f /opt/ros/humble/setup.zsh ]]; then
@@ -204,37 +180,47 @@ fi
 # fi
 
 # ---------------------------------------------------------
-# 9. Conda 初始化
+# Conda 惰性加载：首次调用 conda 时才执行 hook
+# auto_activate_base=False，base 本就不会自动激活，行为不变
 # ---------------------------------------------------------
-
-if [[ -d "$HOME/miniconda3" ]] || [[ -d "/opt/miniconda3" ]]; then
-  if [[ -x "$HOME/miniconda3/bin/conda" ]]; then
-    __conda_setup="$("$HOME/miniconda3/bin/conda" shell.zsh hook 2> /dev/null)"
-  elif [[ -x "/opt/miniconda3/bin/conda" ]]; then
-    __conda_setup="$("/opt/miniconda3/bin/conda" shell.zsh hook 2> /dev/null)"
-  else
-    __conda_setup=""
-  fi
-
+_conda_lazy() {
+  unset -f conda
+  local __conda_setup
+  __conda_setup="$("$HOME/miniconda3/bin/conda" shell.zsh hook 2> /dev/null)"
   if [[ -n "$__conda_setup" ]]; then
     eval "$__conda_setup"
   else
     [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]] && . "$HOME/miniconda3/etc/profile.d/conda.sh"
-    [[ -f "/opt/miniconda3/etc/profile.d/conda.sh" ]] && . "/opt/miniconda3/etc/profile.d/conda.sh"
   fi
-  unset __conda_setup
+  conda "$@"
+}
+if [[ -x "$HOME/miniconda3/bin/conda" ]]; then
+  conda() { _conda_lazy "$@"; }
 fi
 
-# ---------------------------------------------------------
-# 10. 终端代理开关（按需修改为自己的代理节点）
-# ---------------------------------------------------------
 
+# ---------------------------------------------------------
+# zoxide：init 自带 z / zi / 目录追踪 hook，无需手写封装
+# ---------------------------------------------------------
+command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh)"
+
+
+# ---------------------------------------------------------
+# fzf
+# ---------------------------------------------------------
+[[ -f "$HOME/.fzf.zsh" ]] && source "$HOME/.fzf.zsh"
+[[ -f "$ZDOTDIR/.fzf.zsh" ]] && source "$ZDOTDIR/.fzf.zsh"
+
+
+# ---------------------------------------------------------
+# 终端代理开关（PAC 中的内网代理节点）
+# ---------------------------------------------------------
 proxy_on() {
   export http_proxy="http://10.8.0.242:8838"
   export https_proxy="http://10.8.0.242:8838"
   export HTTP_PROXY="$http_proxy"
   export HTTPS_PROXY="$https_proxy"
-  export no_proxy="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12"
+  export no_proxy="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,horizon.ai,horizon.cc,hobot.cc,horizon.auto,hogpu.cc,gua.com,guasemi.com,aliyuncs.com"
   export NO_PROXY="$no_proxy"
   print -P "%F{green}proxy on%f -> 10.8.0.242:8838"
 }
@@ -245,47 +231,25 @@ proxy_off() {
 }
 
 # ---------------------------------------------------------
-# 11. Alias & 现代命令替换
+# Alias
 # ---------------------------------------------------------
-
 alias ..='cd ..'
 alias ...='cd ../..'
+alias l='ls -al'
+alias ll='ls -alFh'
+alias lt='ls -ltrh'
 alias cls='clear'
 
-# eza 智能接管 ls
-if command -v eza >/dev/null 2>&1; then
-  alias ls='eza --icons=always --color=always --group-directories-first'
-  alias l='eza -al --icons=always --color=always --group-directories-first'
-  alias ll='eza -alFh --icons=always --color=always --group-directories-first'
-  alias lt='eza -al --sort=modified --icons=always --color=always --group-directories-first'
-else
-  alias l='ls -al'
-  alias ll='ls -alFh'
-  alias lt='ls -ltrh'
-fi
+alias fd='fdfind'
+alias bat='batcat'
+alias ls='eza'
 
-# fd 智能接管 find
-if command -v fd >/dev/null 2>&1; then
-  alias find='fd'
-elif command -v fdfind >/dev/null 2>&1; then
-  alias fd='fdfind'
-fi
-
-# bat 智能接管 cat (兼容 Ubuntu apt 安装的 batcat)
-if command -v batcat >/dev/null 2>&1; then
-  alias bat='batcat'
-  alias cat='batcat --style=plain --paging=never'
-elif command -v bat >/dev/null 2>&1; then
-  alias cat='bat --style=plain --paging=never'
-fi
-
-# ripgrep 智能接管 grep
-if command -v rg >/dev/null 2>&1; then
-  alias grep='rg --color=auto'
-fi
-
-# btop 替代 top
-command -v btop >/dev/null 2>&1 && alias top='btop'
+# zoxide 直连原生命令的别名（z/zi 已由 init 提供）
+alias za='zoxide add'
+alias zq='zoxide query'
+alias zqi='zoxide query -i'
+alias zr='zoxide remove'
+alias zri='zoxide remove -i'
 
 # tmux
 alias tm='tmux'
@@ -301,14 +265,10 @@ alias zshreload='source "$ZDOTDIR/.zshrc"'
 alias tmuxconfig='vim "$XDG_CONFIG_HOME/tmux/tmux.conf"'
 alias tmuxreload='tmux source-file "$XDG_CONFIG_HOME/tmux/tmux.conf"'
 
-# process / disk (macOS 的 du 不支持 --max-depth，用 -d 1)
+# process / disk
 alias psg='ps aux | grep -i'
 alias df='df -h'
-if [[ -n "$IS_MACOS" ]]; then
-  alias du='du -h -d 1'
-else
-  alias du='du -h --max-depth=1'
-fi
+alias du='du -h --max-depth=1'
 
 # ROS / colcon
 alias cw='cd ~/ros2_ws'
@@ -325,15 +285,15 @@ alias uadd='uv add'
 alias usync='uv sync'
 
 # ---------------------------------------------------------
-# 12. 最终整理 PATH（防止上面 path 更新未导出）
+# 最终整理 PATH（防止上面 path 更新未导出）, 以及其他命令汇总
 # ---------------------------------------------------------
 
 export PATH=${(j.:.)path}
 
 # uv 安装配置
-if [[ -f "$HOME/.local/bin/env" ]]; then
-  . "$HOME/.local/bin/env"
-fi
+#. "$HOME/.local/share/../bin/env"
 
-# tmux
-[ -f "$XDG_CONFIG_HOME/tmux/tmux.conf" ] && tmux source-file "$XDG_CONFIG_HOME/tmux/tmux.conf"
+# tmux —— 仅在 tmux 会话内重载配置（否则每次启动都报 no server running）
+if [[ -n "$TMUX" && -f "$XDG_CONFIG_HOME/tmux/tmux.conf" ]]; then
+  tmux source-file "$XDG_CONFIG_HOME/tmux/tmux.conf"
+fi

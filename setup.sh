@@ -20,6 +20,8 @@ NC='\033[0m'
 # 系统检测
 # ==========================================
 OS="$(uname -s)"
+IS_LINUX=""
+IS_MACOS=""
 case "$OS" in
   Linux)  IS_LINUX=1 ;;
   Darwin) IS_MACOS=1 ;;
@@ -33,9 +35,20 @@ echo -e "${BLUE}>>> 开始部署 home-clean 环境配置 ($([[ -n "$IS_MACOS" ]]
 # ==========================================
 install_deps_linux() {
     echo -e "\n${BLUE}>>> 0. 安装基础系统依赖 (需要 sudo 权限)...${NC}"
-    sudo apt update
-    sudo apt install -y zsh tmux vim git curl wget tree xclip fontconfig \
-        eza fd-find bat ripgrep btop
+    # 先检测缺失的包，避免每次全量 sudo apt update
+    local missing=""
+    local pkg
+    local aliases=(zsh:zsh tmux:tmux vim:vim git:git curl:curl wget:wget xclip:xclip fontconfig:fontconfig \
+        eza:eza fd-find:fd-find bat:bat ripgrep:ripgrep btop:btop)  # tree 由 eza -T 替代
+    for pkg in "${aliases[@]}"; do
+        command -v "${pkg%%:*}" &>/dev/null || dpkg -s "${pkg##*:}" &>/dev/null || missing+=" ${pkg##*:}"
+    done
+    if [ -n "$missing" ]; then
+        sudo apt update
+        sudo apt install -y $missing
+    else
+        echo -e "${GREEN}  [OK] 系统依赖已全部安装${NC}"
+    fi
 }
 
 install_deps_macos() {
@@ -44,7 +57,7 @@ install_deps_macos() {
         echo -e "${YELLOW}  [安装] 未检测到 Homebrew，正在安装...${NC}"
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     fi
-    brew install zsh tmux vim git wget tree eza fd bat ripgrep btop fontconfig
+    brew install zsh tmux vim git wget eza fd bat ripgrep btop fontconfig  # tree 由 eza -T 替代
 }
 
 if [[ -n "$IS_LINUX" ]]; then
@@ -64,7 +77,7 @@ fi
 # ==========================================
 # 准备目标基础目录
 # ==========================================
-mkdir -p "$HOME/.config" "$HOME/.local" "$HOME/.local/share/fonts"
+mkdir -p "$HOME/.config" "$HOME/.local"
 
 # ==========================================
 # 核心函数：安全备份并创建软链接
@@ -94,28 +107,50 @@ safe_link() {
 }
 
 # ==========================================
-# 1. 处理 .config 下的文件夹 (除 fonts 外)
+# 1. 处理 .config 下的文件夹
 # ==========================================
 echo -e "\n${BLUE}>>> 1. 部署 .config 目录...${NC}"
 for folder in "$DOTFILES_DIR"/.config/*; do
     if [ -d "$folder" ]; then
         base_name=$(basename "$folder")
-        # 字体由于系统读取路径问题，我们在后面单独处理
-        if [ "$base_name" == "fonts" ]; then
-            continue
-        fi
         safe_link "$folder" "$HOME/.config/$base_name"
     fi
 done
 
 # ==========================================
-# 2. 处理 .local 下的文件夹
+# 2. 处理 .local 下的内容：复制（非软链）
+# .local 存放数据/资产（字体、shell 历史），部署时从仓库复制到 ~/.local；
+# 本地已有内容不覆盖（用户数据优先）；仅复制叶子条目，不碰 share 整目录
 # ==========================================
-echo -e "\n${BLUE}>>> 2. 部署 .local 目录...${NC}"
-for folder in "$DOTFILES_DIR"/.local/*; do
-    if [ -d "$folder" ]; then
-        base_name=$(basename "$folder")
-        safe_link "$folder" "$HOME/.local/$base_name"
+echo -e "\n${BLUE}>>> 2. 部署 .local 目录 (复制)...${NC}"
+for item in "$DOTFILES_DIR"/.local/* "$DOTFILES_DIR"/.local/share/*; do
+    [ -e "$item" ] || continue
+    rel="${item#"$DOTFILES_DIR"/.local/}"
+    # 跳过中间层目录本身（如 share）：.local/share 是用户数据目录
+    # （keyrings/Trash/应用数据等），绝不能整目录替换
+    [ "$rel" = "share" ] && continue
+    dest="$HOME/.local/$rel"
+    if [ -d "$item" ]; then
+        mkdir -p "$dest"
+        # 逐文件复制，已存在则跳过（保留本地运行时数据）
+        for f in "$item"/* "$item"/.[!.]*; do
+            [ -e "$f" ] || continue
+            fname=$(basename "$f")
+            if [ -e "$dest/$fname" ]; then
+                echo -e "${GREEN}  [OK] 已存在: ~/.local/$rel/$fname${NC}"
+            else
+                cp -r "$f" "$dest/$fname"
+                echo -e "${GREEN}  [复制] ~/.local/$rel/$fname${NC}"
+            fi
+        done
+    else
+        mkdir -p "$(dirname "$dest")"
+        if [ -e "$dest" ]; then
+            echo -e "${GREEN}  [OK] 已存在: ~/.local/$rel${NC}"
+        else
+            cp "$item" "$dest"
+            echo -e "${GREEN}  [复制] ~/.local/$rel${NC}"
+        fi
     fi
 done
 
@@ -151,28 +186,48 @@ else
 fi
 
 # ==========================================
-# 5. 处理系统字体与缓存
+# 5. 刷新字体缓存（字体已由第 2 步从仓库复制到 ~/.local/share/fonts）
 # ==========================================
-echo -e "\n${BLUE}>>> 5. 部署终端极客字体...${NC}"
-if [ -d "$DOTFILES_DIR/.config/fonts" ]; then
-    # 将字体目录软链接到标准系统用户字体路径下
-    safe_link "$DOTFILES_DIR/.config/fonts" "$HOME/.local/share/fonts/home-clean-fonts"
-    if [[ -n "$IS_LINUX" ]]; then
-        echo -e "${YELLOW}  [刷新] 正在重置系统字体缓存，请稍候...${NC}"
-        fc-cache -fv > /dev/null
-        echo -e "${GREEN}  [OK] 字体缓存已刷新${NC}"
-    else
-        echo -e "${GREEN}  [OK] macOS 会自动扫描用户字体目录，无需手动刷新缓存${NC}"
+if ls "$HOME"/.local/share/fonts/*.ttf &>/dev/null; then
+    if command -v fc-cache &>/dev/null; then
+        fc-cache -f >/dev/null 2>&1
+        echo -e "\n${BLUE}>>> 5. 字体已部署，缓存已刷新${NC}"
     fi
 else
-    echo -e "${YELLOW}  [跳过] 未在仓库中找到 .config/fonts 目录${NC}"
+    echo -e "\n${YELLOW}>>> 5. [提示] ~/.local/share/fonts 无字体文件${NC}"
 fi
 
 # ==========================================
-# 6. 切换默认 Shell
+# 6. 安装 TPM（tmux 插件管理器本体）
+# 其余插件由 TPM 管理：首次进入 tmux 后按 prefix + I 安装
+# ==========================================
+TMUX_PLUGIN_DIR="$HOME/.local/share/tmux/plugins"
+install_tpm() {
+    command -v git &>/dev/null || { echo -e "${YELLOW}  [跳过] 无 git，请稍后手动安装 TPM${NC}"; return; }
+    if [ -x "$TMUX_PLUGIN_DIR/tpm/tpm" ]; then
+        echo -e "${GREEN}  [OK] TPM 已安装${NC}"
+        return
+    fi
+    mkdir -p "$TMUX_PLUGIN_DIR"
+    echo -e "${YELLOW}  [安装] clone TPM...${NC}"
+    if git clone --depth 1 -q https://github.com/tmux-plugins/tpm.git "$TMUX_PLUGIN_DIR/tpm"; then
+        echo -e "${GREEN}  [OK] TPM 安装完成；首次进入 tmux 后按 prefix + I 安装其余插件${NC}"
+    else
+        echo -e "${YELLOW}  [提示] TPM 下载失败(可能需代理)，可稍后手动 clone 或用 proxy_on 后重跑${NC}"
+    fi
+}
+if command -v tmux &>/dev/null; then
+    echo -e "\n${BLUE}>>> 6. 安装 TPM...${NC}"
+    install_tpm
+else
+    echo -e "\n${YELLOW}>>> 6. [跳过] 未安装 tmux${NC}"
+fi
+
+# ==========================================
+# 7. 切换默认 Shell
 # ==========================================
 ZSH_BIN="$(command -v zsh)"
-if [ -n "$ZSH_BIN" ] && [ "$SHELL" != "$ZSH_BIN" ]; then
+if [ -n "$ZSH_BIN" ] && [ "$(readlink -f "$SHELL")" != "$(readlink -f "$ZSH_BIN")" ]; then
     echo -e "${YELLOW}>>> 将 Zsh 设置为默认 Shell...${NC}"
     if [[ -n "$IS_MACOS" ]]; then
         # macOS 自带的 zsh 在 /etc/shells 白名单内，可直接切换
