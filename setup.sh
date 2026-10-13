@@ -201,7 +201,7 @@ fi
 # 6. 安装 TPM（tmux 插件管理器本体）
 # 其余插件由 TPM 管理：首次进入 tmux 后按 prefix + I 安装
 # ==========================================
-TMUX_PLUGIN_DIR="$HOME/.local/share/tmux/plugins"
+TMUX_PLUGIN_DIR="$HOME/.local/share/tmux"
 install_tpm() {
     command -v git &>/dev/null || { echo -e "${YELLOW}  [跳过] 无 git，请稍后手动安装 TPM${NC}"; return; }
     if [ -x "$TMUX_PLUGIN_DIR/tpm/tpm" ]; then
