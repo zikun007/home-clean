@@ -8,6 +8,15 @@
 .pi/agent/models-store.json
 .pi/agent/sessions/
 
+# lark-bot 本地个人配置（含 open_id）
+.pi/lark-bot/config.sh
+.pi/lark-bot/bot.log
+.pi/lark-bot/events.ndjson
+.pi/lark-bot/queue.txt
+.pi/lark-bot/state.json
+.pi/lark-bot/task_result.*
+.pi/lark-bot/progress.*
+
 .config/zsh/.zsh_sessions
 .config/zsh/.zcompdump*
 

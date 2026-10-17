@@ -220,7 +220,7 @@ proxy_on() {
   export https_proxy="http://10.8.0.242:8838"
   export HTTP_PROXY="$http_proxy"
   export HTTPS_PROXY="$https_proxy"
-  export no_proxy="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,horizon.ai,horizon.cc,hobot.cc,horizon.auto,hogpu.cc,gua.com,guasemi.com,aliyuncs.com"
+  export no_proxy="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,horizon.ai,horizon.cc,hobot.cc,horizon.auto,hogpu.cc,gua.com,guasemi.com,aliyuncs.com,feishu.cn,larksuite.com,feishucdn.com"
   export NO_PROXY="$no_proxy"
   print -P "%F{green}proxy on%f -> 10.8.0.242:8838"
 }
