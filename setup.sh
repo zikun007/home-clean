@@ -119,7 +119,7 @@ done
 
 # ==========================================
 # 2. 处理 .local 下的内容：复制（非软链）
-# .local 存放数据/资产（字体、shell 历史），部署时从仓库复制到 ~/.local；
+# .local 存放数据/资产（字体），部署时从仓库复制到 ~/.local；
 # 本地已有内容不覆盖（用户数据优先）；仅复制叶子条目，不碰 share 整目录
 # ==========================================
 echo -e "\n${BLUE}>>> 2. 部署 .local 目录 (复制)...${NC}"
@@ -161,28 +161,54 @@ echo -e "\n${BLUE}>>> 3. 部署根目录配置文件...${NC}"
 safe_link "$DOTFILES_DIR/.zshenv" "$HOME/.zshenv"
 
 # ==========================================
-# 4. 处理 .pi（pi coding agent 配置）
-# 注意：auth.json / mcp-auth.json / models-store.json / sessions/ 属于
-# 敏感或运行时文件，不入仓库也不覆盖本地已有文件，只做“本地不存在则链接”
+# 4. 部署 .agents/lark-bot 运行时
+# 仓库只保存源码；配置/状态/日志/记忆放在 ~/.agents/lark-bot
 # ==========================================
-echo -e "\n${BLUE}>>> 4. 部署 .pi (pi coding agent) 配置...${NC}"
-if [ -d "$DOTFILES_DIR/.pi/agent" ]; then
-    mkdir -p "$HOME/.pi/agent"
-
-    # 仓库内的配置项（目录与单文件逐项链接）
-    for item in agents prompts skills extensions \
-                APPEND_SYSTEM.md settings.json mcp.json models.json; do
-        safe_link "$DOTFILES_DIR/.pi/agent/$item" "$HOME/.pi/agent/$item"
-    done
-
-    # 敏感/运行时文件：仅当本地不存在时提示，绝不覆盖
-    for private in auth.json mcp-auth.json models-store.json sessions; do
-        if [ ! -e "$HOME/.pi/agent/$private" ]; then
-            echo -e "${YELLOW}  [提示] $HOME/.pi/agent/$private 不存在，首次使用 pi 时会自动生成${NC}"
-        fi
-    done
+echo -e "\n${BLUE}>>> 4. 部署 .agents/lark-bot 运行时...${NC}"
+LARK_BOT_HOME="$HOME/.agents/lark-bot"
+mkdir -p "$LARK_BOT_HOME/logs" "$LARK_BOT_HOME/memory"
+if [ ! -f "$LARK_BOT_HOME/config.env" ]; then
+    install -m 600 "$DOTFILES_DIR/.agents/lark-bot/config.example.env" "$LARK_BOT_HOME/config.env"
+    echo -e "${YELLOW}  [提示] 已生成 $LARK_BOT_HOME/config.env，请填写 OWNER_ID 后启动${NC}"
 else
-    echo -e "${YELLOW}  [跳过] 仓库中不存在 .pi/agent 目录${NC}"
+    echo -e "${GREEN}  [保留] $LARK_BOT_HOME/config.env${NC}"
+fi
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/lark-bot"
+echo -e "${GREEN}  [链接] ~/.local/bin/lark-bot${NC}"
+
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    mkdir -p "$HOME/.config/systemd/user"
+    install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/lark-bot.service" \
+        "$HOME/.config/systemd/user/lark-bot.service"
+    systemctl --user daemon-reload 2>/dev/null || true
+    echo -e "${YELLOW}  [提示] 可执行 systemctl --user enable --now lark-bot 启动${NC}"
+fi
+
+# ==========================================
+# 4b. 可选：部署 omp-lark-bot（local-omp）
+# 仅在用户已有 ~/.omp 时启用，使用独立的配置目录和 lark-cli profile
+# ==========================================
+if [ -d "$HOME/.omp" ]; then
+    echo -e "\n${BLUE}>>> 4b. 部署 omp-lark-bot 运行时...${NC}"
+    OMP_BOT_HOME="$HOME/.omp/lark-bot"
+    mkdir -p "$OMP_BOT_HOME/logs" "$OMP_BOT_HOME/memory"
+    if [ ! -f "$OMP_BOT_HOME/config.env" ]; then
+        install -m 600 "$DOTFILES_DIR/.agents/lark-bot/config.omp.example.env" \
+            "$OMP_BOT_HOME/config.env"
+        echo -e "${YELLOW}  [提示] 已生成 $OMP_BOT_HOME/config.env，请填写 OWNER_ID / LARK_PROFILE${NC}"
+    else
+        echo -e "${GREEN}  [保留] $OMP_BOT_HOME/config.env${NC}"
+    fi
+    ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/omp-lark-bot"
+    echo -e "${GREEN}  [链接] ~/.local/bin/omp-lark-bot${NC}"
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+        mkdir -p "$HOME/.config/systemd/user"
+        install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/omp-lark-bot.service" \
+            "$HOME/.config/systemd/user/omp-lark-bot.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        echo -e "${YELLOW}  [提示] 可执行 systemctl --user enable --now omp-lark-bot 启动${NC}"
+    fi
 fi
 
 # ==========================================

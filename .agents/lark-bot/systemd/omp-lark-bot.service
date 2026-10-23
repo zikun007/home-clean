@@ -1,0 +1,21 @@
+[Unit]
+Description=omp-lark-bot: Feishu <-> omp bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.omp/lark-bot
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=%h
+Environment=LARK_BOT_HOME=%h/.omp/lark-bot
+Environment=LARK_BOT_SERVICE=omp-lark-bot
+Environment="PATH=%h/.local/bin:%h/.config/nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=%h/.local/bin/omp-lark-bot run --no-console
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

@@ -56,6 +56,20 @@ cd home-clean
 
 After deployment, log out and back in (or run `source ~/.zshenv`) to enjoy your new environment.
 
+## 🤖 Feishu Lark Bot (lark-bot)
+
+`.agents/lark-bot/` is an always-on Feishu ↔ agent bridge: it consumes Lark messages, runs `codex exec` or `omp --mode json`, and streams progress plus the final answer back. The default deployment drives Codex; when `~/.omp` exists, `setup.sh` also installs `omp-lark-bot` (local-omp).
+
+```bash
+./setup.sh
+vim ~/.agents/lark-bot/config.env   # set OWNER_ID
+lark-bot check
+lark-bot start
+lark-bot status
+```
+
+Commands: `/pwd`, `/cd <path>`, `/status`, `/new`, `/stop`, `/help` (slash form only). Owner-only P2P by default; `workspace-write` sandbox; progress is batched and replies use Lark Markdown. See `.agents/lark-bot/README.md`.
+
 ## 🔧 Platform Differences
 
 | Feature | Ubuntu Linux | macOS (Apple Silicon) |

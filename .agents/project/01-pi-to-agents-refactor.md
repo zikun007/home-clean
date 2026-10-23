@@ -1,6 +1,25 @@
 # 01 · `.pi` → `.agents` 重构方案
 
-- 状态：待确认
+## 执行结果（2026-10-23）
+
+- 仓库 `.pi/` 已重命名为 `.agents/`，`.pi/agent/` 已清理。
+- `.pi/agent/rules/cpp-code-rule.md` 已迁到 `.agents/rules/01-cpp-code-rule.md`。
+- `.agents/lark-bot/` 已重写为 Python 3 + `codex exec` 版本。
+- 运行时迁到 `~/.agents/lark-bot/`，旧 `~/.pi` 已移除。
+- `lark-bot.service` 已启用并运行，飞书事件监听 `ready`、WebSocket `connected`。
+- 单元/假集成测试 31 项通过。
+- 真实链路冒烟：飞书 `/pwd` → Codex 执行 → local-codex 回复
+  `当前目录：/home/horizon/workspace`。
+- 新增原生命令 `/pwd`、`/cd <path>`：命令只识别 `/xxx`，中文不再触发；
+  工作目录按 chat 持久化，每个目录使用独立 Codex thread。
+- 进度消息改为按批合并（默认 10 条或 60 秒），任务结束时补发最后一批；
+  不再每条命令发一条消息。
+- 最终回复、命令回复均使用飞书 Markdown（`msg_type=post`）渲染。
+- 同一 `bridge.py` 支持 `AGENT_KIND=codex|omp`；omp 使用
+  `omp --mode json [--resume <session_id>]`，local-omp 部署于
+  `~/.omp/lark-bot`（profile `omp-bot`，服务 `omp-lark-bot`）。
+
+- 状态：已完成（2026-10-23）
 - 日期：2026-10-23
 - 建议分支：`refactor/agents`
 - 原则：先迁移、后重写；旧运行时归档不直接删除；每一步可回滚
@@ -204,9 +223,12 @@ codex exec resume "$THREAD_ID" --json ... "$prompt"
 
 | Codex 事件 | 飞书进度 |
 |---|---|
-| `item.started` + `command_execution` | `🔧 执行：<command>` |
+| `item.completed` + `command_execution` | `✅ 执行：<command>`（非 0 退出码标记 ⚠️） |
 | `item.completed` + `file_change` | `📝 修改：<paths>` |
 | `item.completed` + `mcp_tool_call` | `🔌 调用：<server>.<tool>` |
+
+进度事件不会逐条发送：默认攒够 `PROGRESS_BATCH_ITEMS=10` 条或
+`PROGRESS_BATCH_SECONDS=60` 秒发送一条“执行摘要”，任务结束时强制补发。
 | `item.completed` + `agent_message` | 记录为最终候选 |
 | `turn.completed` | 结束并发送最终答复 |
 
@@ -220,10 +242,10 @@ codex exec resume "$THREAD_ID" --json ... "$prompt"
 
 | 命令 | 行为 |
 |---|---|
-| `/help` / `帮助` | 命令说明 |
-| `/status` / `状态` | 当前任务、队列长度、线程、运行时长 |
-| `/new` / `新会话` | 清除当前 chat 的 Codex thread |
-| `/stop` / `停止` | 终止当前任务 |
+| `/help` | 命令说明 |
+| `/status` | 当前任务、队列长度、线程、运行时长 |
+| `/new` | 清除当前 chat 的会话 |
+| `/stop` | 终止当前任务 |
 | 普通文本 | 入队执行 |
 
 ### 5.7 配置模板

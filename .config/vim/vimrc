@@ -133,6 +133,9 @@ execute 'set backupdir=' . fnameescape(s:vimcache . '/backup//')
 execute 'set directory=' . fnameescape(s:vimcache . '/swap//')
 execute 'set viminfo+=n' . fnameescape(s:vimcache . '/viminfo')
 
+" netrw 历史文件也放进 XDG cache，避免重建 ~/.vim
+let g:netrw_home = s:vimcache
+
 " ================= GUI-only =================
 if has('gui_running')
     set guifont=Courier_New:h10:cANSI

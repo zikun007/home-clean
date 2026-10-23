@@ -58,6 +58,20 @@ cd home-clean
 
 部署完成后，重新登录终端（或执行 `source ~/.zshenv`）即可享受全新的开发环境。
 
+## 🤖 飞书机器人 (lark-bot)
+
+`.agents/lark-bot/` 提供飞书 ↔ 助手的常驻桥接：监听飞书消息，调用 `codex exec` 或 `omp --mode json`，把进度和结果发回。默认部署 Codex 版；检测到 `~/.omp` 时 `setup.sh` 同时安装 `omp-lark-bot`（local-omp）。
+
+```bash
+./setup.sh                 # 生成 ~/.agents/lark-bot/config.env 并安装 lark-bot 命令
+vim ~/.agents/lark-bot/config.env   # 至少填写 OWNER_ID
+lark-bot check
+lark-bot start
+lark-bot status
+```
+
+支持 `/pwd`、`/cd <path>`、`/status`、`/new`、`/stop`、`/help`；命令只识别 `/xxx`。默认只响应主人私聊，使用 `workspace-write` 沙箱；进度消息按批合并，回复使用飞书 Markdown。详见 `.agents/lark-bot/README.md`。
+
 ## 🔧 平台差异说明
 
 | 功能 | Ubuntu Linux | macOS (Apple Silicon) |

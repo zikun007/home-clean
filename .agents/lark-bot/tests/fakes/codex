@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fake codex used by unit tests. Ignores all arguments and emits a tiny JSONL stream.
+cat <<'JSON'
+{"type":"thread.started","thread_id":"fake-thread-1"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"echo hi","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"fake done"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+JSON

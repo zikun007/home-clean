@@ -2,28 +2,28 @@
 *.log
 *.history
 
-# pi agent 运行时产物（含 API Key 与会话数据，不入库）
-.pi/agent/auth.json
-.pi/agent/mcp-auth.json
-.pi/agent/models-store.json
-.pi/agent/sessions/
-
-# lark-bot 本地个人配置（含 open_id）
-.pi/lark-bot/config.sh
-.pi/lark-bot/bot.log
-.pi/lark-bot/events.ndjson
-.pi/lark-bot/queue.txt
-.pi/lark-bot/state.json
-.pi/lark-bot/task_result.*
-.pi/lark-bot/progress.*
+# .agents/lark-bot 运行时产物（配置含 open_id，状态/日志/记忆不入库）
+.agents/lark-bot/config.env
+.agents/lark-bot/state.db
+.agents/lark-bot/state.db-*
+.agents/lark-bot/logs/
+.agents/lark-bot/memory/
+.agents/lark-bot/*.pid
+.agents/lark-bot/last_message_*.txt
+.agents/lark-bot/events.ndjson
+.agents/lark-bot/__pycache__/
+.agents/lark-bot/**/__pycache__/
+*.pyc
 
 .config/zsh/.zsh_sessions
+.local/share/zsh/.zsh_history
+.local/share/zsh/.zsh_sessions/
 .config/zsh/.zcompdump*
 
 .cache/*
 .local/state/*.log
 
-# .local/share 仅维护 zsh 历史与字体；其余为运行时文件，不入库
+# .local/share 仅维护字体；其余为运行时文件，不入库
 .local/share/*
 !.local/share/zsh/
 !.local/share/fonts/
