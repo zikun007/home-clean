@@ -192,6 +192,10 @@ if ls "$HOME"/.local/share/fonts/*.ttf &>/dev/null; then
     if command -v fc-cache &>/dev/null; then
         fc-cache -f >/dev/null 2>&1
         echo -e "\n${BLUE}>>> 5. 字体已部署，缓存已刷新${NC}"
+        # fontconfig 的字体列表缓存在 gnome-terminal-server 启动时加载并常驻，
+        # 只刷新磁盘缓存不会让已在运行的终端看到新字体（首选项里会显示旧名字
+        # 或直接回退到 Noto）。必须重启终端服务器进程。
+        echo -e "${YELLOW}  [注意] 已运行的终端不会自动感知新字体：请完全退出所有终端窗口后重新打开${NC}"
     fi
 else
     echo -e "\n${YELLOW}>>> 5. [提示] ~/.local/share/fonts 无字体文件${NC}"

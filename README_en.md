@@ -29,6 +29,7 @@ home-clean/
 ├── README.md           # Chinese Documentation
 ├── README_en.md        # English Documentation
 ├── .config/            # Core configurations (XDG-compliant layout)
+│   ├── fontconfig/     # Aliases for legacy font family names
 │   ├── git/            # Git configuration
 │   ├── tmux/           # Tmux configs and plugins
 │   ├── vim/            # Pure Vim setup

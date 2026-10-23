@@ -29,6 +29,7 @@ home-clean/
 ├── README.md
 ├── README_en.md
 ├── .config/            # 存放应用核心配置（XDG 规范布局，软链到 ~/.config）
+│   ├── fontconfig/      # 旧字体家族名别名（避免升级后回退到 Noto）
 │   ├── git/             # git 详细配置
 │   ├── tmux/            # Tmux 详细配置与插件
 │   ├── vim/             # Vim 纯净版配置
