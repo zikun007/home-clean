@@ -34,7 +34,7 @@ home-clean/
 │   ├── vim/             # Vim 纯净版配置
 │   └── zsh/             # Zsh 主题、Oh My Zsh 与插件
 ├── .local/              # 存放本地数据与资产（复制到 ~/.local，不覆盖已有内容）
-│   ├── share/fonts/     # 终端字体 (FiraCode Nerd Font、宋体)
+│   ├── share/fonts/     # 终端字体 (FiraCode Nerd Font Mono、宋体)
 │   └── share/zsh/       # zsh 历史
 ├── .zshenv              # Zsh 环境变量入口
 └── setup.sh             # 跨平台部署与安装脚本

@@ -29,13 +29,13 @@ home-clean/
 ├── README.md           # Chinese Documentation
 ├── README_en.md        # English Documentation
 ├── .config/            # Core configurations (XDG-compliant layout)
-│   ├── fonts/          # FiraCode Nerd Font & SimSun
 │   ├── git/            # Git configuration
 │   ├── tmux/           # Tmux configs and plugins
 │   ├── vim/            # Pure Vim setup
 │   └── zsh/            # Zsh themes, Oh My Zsh and plugins
-├── .local/             # Local data and states
-│   └── share/zsh/
+├── .local/             # Local data and assets (copied to ~/.local)
+│   ├── share/fonts/    # FiraCode Nerd Font Mono & SimSun
+│   └── share/zsh/      # Zsh history
 ├── .zshenv             # Zsh environment variables entry
 └── setup.sh            # Cross-platform deployment script
 ```
