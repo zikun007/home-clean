@@ -17,17 +17,31 @@
 - `lark-cli`（已登录，bot 身份 ready）
 - `codex` 或 `omp`（取决于 `AGENT_KIND`）
 
-## 安装
+## 安装（可选）
+
+`setup.sh` 不强制安装 lark-bot，会作为可选组件询问：
+
+- stdin 是终端时逐项询问：已安装默认 `Y`，未安装默认 `N`；
+- 非交互（脚本/CI，或 `--non-interactive`）默认**不安装**；
+- 跳过只表示本次不安装/不更新，**不会卸载**已有安装。
 
 ```bash
-# 仓库根目录执行
+# 仓库根目录执行（交互选择）
 ./setup.sh
+
+# 非交互：显式指定
+./setup.sh --with-lark-bot                     # 安装/更新 Codex 版
+./setup.sh --with-lark-bot --with-omp-bot      # 两个都装（omp 需已有 ~/.omp）
+./setup.sh --without-lark-bot                  # 明确跳过
 
 # 或手动
 mkdir -p ~/.agents/lark-bot/{logs,memory}
 install -m 600 .agents/lark-bot/config.example.env ~/.agents/lark-bot/config.env
 ln -sfn "$PWD/.agents/lark-bot/bin/lark-bot" ~/.local/bin/lark-bot
 ```
+
+脚本可反复执行：每次重新询问，已有 `config.env`、`logs/`、`state.db`、会话数据不覆盖；
+结束时打印各组件状态（已部署 / 已跳过）。systemd 服务只做 `daemon-reload`，不自动 `enable`。
 
 编辑 `~/.agents/lark-bot/config.env`，至少填写：
 
@@ -79,7 +93,8 @@ lark-bot logs
 | 飞书身份 | 默认 profile | `LARK_PROFILE=omp-bot` |
 
 `omp` 版本还支持旧配置键别名：`OMP_WORKDIR`、`OMP_BIN`、`LARK_BIN`。
-部署到 `~/.omp/lark-bot`（local-omp）：
+部署到 `~/.omp/lark-bot`（local-omp），`setup.sh` 检测到 `~/.omp` 时才会询问，也可直接
+`./setup.sh --with-omp-bot` 安装；手动方式：
 
 ```bash
 mkdir -p ~/.omp/lark-bot/{logs,memory}

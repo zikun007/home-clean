@@ -43,7 +43,7 @@ home-clean/
 
 ## 🚀 Quick Start
 
-Note: setup.sh will prompt for privileges to install system packages (`sudo` on Ubuntu, Homebrew on macOS). The script features a built-in safety mechanism that automatically backs up your existing configurations to ~/.dotfiles_backup to prevent any destructive overwrites.
+Note: setup.sh will prompt for privileges to install system packages (`sudo` on Ubuntu, Homebrew on macOS). Optional components (lark-bot / omp-lark-bot) are asked interactively; non-interactive runs (CI) install nothing by default. See `--help`. The script features a built-in safety mechanism that automatically backs up your existing configurations to ~/.dotfiles_backup to prevent any destructive overwrites.
 
 ```bash
 # 1. Clone the repository
@@ -58,17 +58,21 @@ After deployment, log out and back in (or run `source ~/.zshenv`) to enjoy your 
 
 ## 🤖 Feishu Lark Bot (lark-bot)
 
-`.agents/lark-bot/` is an always-on Feishu ↔ agent bridge: it consumes Lark messages, runs `codex exec` or `omp --mode json`, and streams progress plus the final answer back. The default deployment drives Codex; when `~/.omp` exists, `setup.sh` also installs `omp-lark-bot` (local-omp).
+`.agents/lark-bot/` is an always-on Feishu ↔ agent bridge: it consumes Lark messages, runs `codex exec` or `omp --mode json`, and streams progress plus the final answer back. **Installing it is optional**: `setup.sh` asks per component (default Y when already installed, N when not), or you can pass flags; `omp-lark-bot` (local-omp) is only offered when `~/.omp` exists.
 
 ```bash
-./setup.sh
-vim ~/.agents/lark-bot/config.env   # set OWNER_ID
+./setup.sh                         # asks whether to install lark-bot (skippable)
+./setup.sh --with-lark-bot         # no prompt: install/update the Codex variant
+./setup.sh --without-lark-bot      # skip explicitly (existing install is kept)
+vim ~/.agents/lark-bot/config.env  # set OWNER_ID
 lark-bot check
 lark-bot start
 lark-bot status
 ```
 
 Commands: `/pwd`, `/cd <path>`, `/status`, `/new`, `/stop`, `/help` (slash form only). Owner-only P2P by default; `workspace-write` sandbox; progress is batched and replies use Lark Markdown. See `.agents/lark-bot/README.md`.
+
+`setup.sh` is re-runnable: optional components are asked again each run, existing `config.env`, logs, DB and session data are never overwritten, and skipping never uninstalls anything.
 
 ## 🔧 Platform Differences
 

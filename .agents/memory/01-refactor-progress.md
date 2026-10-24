@@ -29,3 +29,12 @@
   - 验证：check ok、websocket connected、发送者 `local-omp`、`msg_type=post`
 - 测试 31 项通过；local-codex `lark-bot` 已重启加载新代码。
 - 用户已批准提交；待办：按需开启群聊/附件。
+
+## 2026-10-24 · setup.sh 可选组件安装
+
+- 新增参数：`--with-lark-bot` / `--without-lark-bot`、`--with-omp-bot` / `--without-omp-bot`、
+  `--interactive` / `--non-interactive`（`--yes`/`-y`）、`--help`。
+- 默认交互（仅 stdin 为 TTY）：已安装默认 Y，未安装默认 N；非交互默认不安装。
+- 跳过不卸载；每次执行重新询问，配置/日志/状态/会话不覆盖；结束打印组件状态摘要。
+- `install_lark_bot()` / `install_omp_bot()` 抽取为函数，第 4/4b 节按选择调用。
+- 同步文档：`README.md`、`README_en.md`、`.agents/lark-bot/README.md`。

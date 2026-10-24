@@ -45,7 +45,7 @@ home-clean/
 
 > **警告:** 执行前建议备份原有的 `.zshrc` 或 `.tmux.conf`。
 
-注意: setup.sh 会自动请求权限以安装系统依赖（Ubuntu 需 sudo，macOS 使用 Homebrew）。脚本内置安全机制，会自动将你原有的配置备份到 ~/.dotfiles_backup 目录下，不会产生破坏性覆盖。
+注意: setup.sh 会自动请求权限以安装系统依赖（Ubuntu 需 sudo，macOS 使用 Homebrew）。可选组件（lark-bot / omp-lark-bot）默认交互询问，非交互模式（如 CI）默认不安装，可用 `--help` 查看参数。脚本内置安全机制，会自动将你原有的配置备份到 ~/.dotfiles_backup 目录下，不会产生破坏性覆盖。
 
 ```bash
 # 1. 克隆仓库
@@ -60,17 +60,21 @@ cd home-clean
 
 ## 🤖 飞书机器人 (lark-bot)
 
-`.agents/lark-bot/` 提供飞书 ↔ 助手的常驻桥接：监听飞书消息，调用 `codex exec` 或 `omp --mode json`，把进度和结果发回。默认部署 Codex 版；检测到 `~/.omp` 时 `setup.sh` 同时安装 `omp-lark-bot`（local-omp）。
+`.agents/lark-bot/` 提供飞书 ↔ 助手的常驻桥接：监听飞书消息，调用 `codex exec` 或 `omp --mode json`，把进度和结果发回。**安装是可选项**：`setup.sh` 会逐项询问（已安装默认 Y，未安装默认 N），也可用参数直接指定；检测到 `~/.omp` 时才会询问 `omp-lark-bot`（local-omp）。
 
 ```bash
-./setup.sh                 # 生成 ~/.agents/lark-bot/config.env 并安装 lark-bot 命令
-vim ~/.agents/lark-bot/config.env   # 至少填写 OWNER_ID
+./setup.sh                         # 交互询问是否安装 lark-bot（可跳过）
+./setup.sh --with-lark-bot         # 跳过询问，直接安装/更新 Codex 版
+./setup.sh --without-lark-bot      # 明确跳过（不卸载已有安装）
+vim ~/.agents/lark-bot/config.env  # 至少填写 OWNER_ID
 lark-bot check
 lark-bot start
 lark-bot status
 ```
 
 支持 `/pwd`、`/cd <path>`、`/status`、`/new`、`/stop`、`/help`；命令只识别 `/xxx`。默认只响应主人私聊，使用 `workspace-write` 沙箱；进度消息按批合并，回复使用飞书 Markdown。详见 `.agents/lark-bot/README.md`。
+
+`setup.sh` 可反复执行：每次都重新询问可选组件，已有的 `config.env`、日志、数据库、会话数据不会被覆盖；跳过只是本次不安装，不会卸载。
 
 ## 🔧 平台差异说明
 
