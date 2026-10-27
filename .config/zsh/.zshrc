@@ -118,6 +118,12 @@ if [[ -d "$CUDA_HOME/lib64" ]]; then
   export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
+
+# homebrew
+if [[ -d "/opt/homebrew/bin" ]]; then
+    path=("/opt/homebrew/bin" $path)
+fi
+
 # ---------------------------------------------------------
 # Powerlevel10k instant prompt
 # 尽量靠前，避免后面插件影响首屏速度
@@ -143,6 +149,9 @@ plugins=(
   zsh-vi-mode
   fast-syntax-highlighting
 )
+
+# 自定义补全函数（_codex/_claude/_omp 等），必须在 compinit 之前加入 fpath
+fpath=("$ZDOTDIR/completions" $fpath)
 
 source "$ZSH/oh-my-zsh.sh"
 
@@ -243,7 +252,10 @@ alias ll='ls -alFh'
 alias lt='ls -ltrh'
 alias cls='clear'
 
-alias fd='fdfind'
+# 仅当 fdfind 存在时提供 fd 别名
+if (( $+commands[fdfind] )); then
+  alias fd='fdfind'
+fi
 alias bat='batcat'
 alias ls='eza'
 

@@ -1,0 +1,169 @@
+#compdef claude
+
+# Claude Code 没有内置补全脚本，这里手写一份。
+# 覆盖子命令 + 主要选项；升级后如有新参数，参考 `claude --help` 增补。
+
+# ---------------------------------------------------------------
+# -r/--resume 的会话补全
+# 数据来源：$CLAUDE_CONFIG_DIR/projects/<编码后的 cwd>/*.jsonl
+# 标题优先取最后一条 ai-title，其次最后一条 last-prompt
+# ---------------------------------------------------------------
+_claude_sessions() {
+  emulate -L zsh
+  setopt local_options null_glob
+
+  local cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  local projects_dir="$cfg_dir/projects"
+  local cwd="${PWD:A}"
+  local dir="$projects_dir/${cwd//\//-}"
+  local d
+
+  # 项目目录名的编码规则没公开，按 cwd 兜底匹配
+  if [[ ! -d $dir ]]; then
+    for d in "$projects_dir"/*(N/); do
+      if head -c 65536 "$d"/*.jsonl(N) 2>/dev/null | grep -qsF -- "\"cwd\":\"$cwd\""; then
+        dir=$d
+        break
+      fi
+    done
+  fi
+  [[ -d $dir ]] || return 1
+
+  local -a sessions
+  local f id title
+  # (om) 按修改时间从新到旧，只取最近 50 个
+  for f in "$dir"/*.jsonl(Nom[1,50]); do
+    id="${f:t:r}"
+    title=$(tail -c 131072 -- "$f" 2>/dev/null |
+      grep -o '"aiTitle":"[^"]*"' | tail -n 1 |
+      sed -e 's/^"aiTitle":"//' -e 's/"$//')
+    if [[ -z $title ]]; then
+      title=$(tail -c 131072 -- "$f" 2>/dev/null |
+        grep -o '"lastPrompt":"[^"]*"' | tail -n 1 |
+        sed -e 's/^"lastPrompt":"//' -e 's/"$//')
+    fi
+    # 短会话可能两个字段都没有，退回第一条手动输入
+    if [[ -z $title ]]; then
+      title=$(grep -m 1 -F '"promptSource":"typed"' "$f" 2>/dev/null |
+        grep -o '"content":"[^"]*"' | head -n 1 |
+        sed -e 's/^"content":"//' -e 's/"$//')
+    fi
+    title="${title%\\}"
+    title="${title[1,50]}"
+    title="${title//:/\\:}"
+    [[ -z $title ]] && title='(无标题)'
+    sessions+=("$id:$title")
+  done
+
+  (( $#sessions )) || return 1
+  _describe -V -t sessions 'Claude 会话' sessions
+}
+
+_claude() {
+  local -a _claude_subcommands
+  _claude_subcommands=(
+    'agents:Manage background agents'
+    'attach:Open a background session in this terminal'
+    'auth:Manage authentication'
+    'auto-mode:Inspect or reset auto mode classifier configuration'
+    'doctor:Check the health of the installation'
+    'gateway:Run the enterprise auth/telemetry gateway'
+    'import:Import config from another AI coding agent'
+    'install:Install Claude Code native build'
+    'logs:Print a background session terminal output'
+    'mcp:Configure and manage MCP servers'
+    'plugin:Manage Claude Code plugins'
+    'project:Manage Claude Code project state'
+    'respawn:Restart a background session'
+    'rm:Delete a background session'
+    'setup-token:Set up a long-lived authentication token'
+    'stop:Stop a background session'
+    'kill:Stop a background session'
+    'ultrareview:Run a cloud-hosted multi-agent code review'
+    'update:Check for updates and install if available'
+    'upgrade:Check for updates and install if available'
+  )
+
+  _arguments -C \
+    '(- *)'{-h,--help}'[Display help]' \
+    '(- *)'{-v,--version}'[Display version]' \
+    '(-p --print)'{-p,--print}'[Print response and exit (non-interactive)]' \
+    '(-c --continue)'{-c,--continue}'[Continue the most recent conversation]' \
+    '(-r --resume)'{-r,--resume}'[Resume a conversation by session ID or picker]:session:_claude_sessions' \
+    '(-n --name)'{-n,--name}'[Set a display name for this session]:name:' \
+    '(-w --worktree)'{-w,--worktree}'[Create a new git worktree for this session]' \
+    '--model[Model for the current session]:model:(sonnet opus haiku)' \
+    '--fallback-model[Model to fall back to when overloaded]:model:' \
+    '--effort[Effort level for the current session]:level:(low medium high xhigh max)' \
+    '--permission-mode[Permission mode for the session]:mode:(acceptEdits auto bypassPermissions manual dontAsk plan)' \
+    '--output-format[Output format (with --print)]:format:(text json stream-json)' \
+    '--input-format[Input format (with --print)]:format:(text stream-json)' \
+    '--add-dir[Additional directories to allow tool access]:directory:_directories' \
+    '--settings[Path to a settings JSON file or inline JSON]:file:_files' \
+    '--setting-sources[Comma-separated list of setting sources]:sources:' \
+    '--mcp-config[Load MCP servers from JSON files or inline JSON]:config:_files' \
+    '--strict-mcp-config[Only use MCP servers from --mcp-config]' \
+    '--agents[JSON object defining custom agents]:json:' \
+    '--agent[Agent for the current session]:agent:' \
+    '--system-prompt[System prompt to use for the session]:prompt:' \
+    '--append-system-prompt[Append text to the default system prompt]:prompt:' \
+    '--system-prompt-snapshot[Record the system prompt per session]:value:(on off)' \
+    '--allowedTools[Comma-separated tools to allow]:tools:' \
+    '--allowed-tools[Comma-separated tools to allow]:tools:' \
+    '--disallowedTools[Comma-separated tools to disallow]:tools:' \
+    '--disallowed-tools[Comma-separated tools to disallow]:tools:' \
+    '--tools[Specify the list of available built-in tools]:tools:' \
+    '--disable-slash-commands[Disable all skills]' \
+    '--max-budget-usd[Maximum dollar amount to spend]:amount:' \
+    '--session-id[Use a specific session ID]:uuid:' \
+    '--fork-session[When resuming, create a new session ID]' \
+    '--bg[Start the session in the background]' \
+    '--background[Start the session in the background]' \
+    '--dangerously-skip-permissions[Bypass all permission checks]' \
+    '--allow-dangerously-skip-permissions[Allow bypassing permission checks]' \
+    '--bare[Minimal mode: skip hooks, LSP, plugin sync, etc.]' \
+    '--brief[Enable SendUserMessage tool for brief output]' \
+    '--verbose[Override verbose mode setting]' \
+    '--debug[Enable debug mode]' \
+    '--debug-file[Write debug logs to a file]:file:_files' \
+    '--json-schema[JSON Schema for structured output]:schema:' \
+    '--plugin-dir[Load a plugin from a directory or zip]:directory:_directories' \
+    '--plugin-url[Fetch a plugin zip from a URL]:url:' \
+    '--ide[Automatically connect to IDE on startup]' \
+    '--chrome[Enable Claude in Chrome integration]' \
+    '--no-chrome[Disable Claude in Chrome integration]' \
+    '--tmux[Create a tmux session for the worktree]' \
+    '--remote-control[Start a Remote Control session]' \
+    '--teleport[Resume a teleport session]' \
+    '--safe-mode[Start with all customizations disabled]' \
+    '--restricted[Restricted mode]' \
+    '--cloud[Create a cloud session]' \
+    '--environment[Create a cloud session on a self-hosted environment]:environment:' \
+    '--file[File resources to download at startup]:file:_files' \
+    '--from-pr[Resume a session linked to a PR]:pr:' \
+    '--no-session-persistence[Disable session persistence]' \
+    '--autocompact[Auto-compact window size]:mode:(auto)' \
+    '--permission-prompts[Who answers permission prompts with --print]:target:(host none)' \
+    '--include-hook-events[Include hook lifecycle events in stream-json output]' \
+    '--include-partial-messages[Include partial message chunks]' \
+    '--replay-user-messages[Re-emit user messages from stdin]' \
+    '--forward-subagent-text[Forward subagent text and thinking]' \
+    '--exclude-dynamic-system-prompt-sections[Exclude dynamic prompt sections]' \
+    '--betas[Beta headers to include in API requests]:betas:' \
+    '--ax-screen-reader[Render screen-reader friendly output]' \
+    '--prompt-suggestions[Enable prompt suggestions]' \
+    '--remote-control-session-name-prefix[Prefix for Remote Control session names]:prefix:' \
+    '1: :->command' \
+    '*:: :->args'
+
+  case $state in
+    command)
+      _describe -t commands 'claude command' _claude_subcommands
+      ;;
+    args)
+      _files
+      ;;
+  esac
+}
+
+_claude "$@"

@@ -1,0 +1,84 @@
+# =========================================================
+# ~/.config/ghostty/config.ghostty
+# Ghostty 配置（由 home-clean 管理）
+# 修改保存后 Ghostty 会自动重新加载；也可按 Cmd+Shift+, 手动重载
+# =========================================================
+
+# --------------------------
+# 字体
+# --------------------------
+font-family = FiraCode Nerd Font Mono
+font-size = 14
+# 连字（注意：tmux 面板内部不生效，这是 tmux 逐单元格渲染的限制）
+font-feature = +calt
+font-feature = +liga
+
+# --------------------------
+# 主题：Night Owl（深海军蓝）
+# 前景/背景对比度约 13.5:1（TokyoNight Storm 约 9:1）
+# 备选：TokyoNight Night（同为东京夜，只是更深）/ Rose Pine Moon（柔和蓝紫）
+#       Nightfox（低饱和蓝青）/ Kanagawa Wave（暖纸色前景）
+# --------------------------
+theme = Night Owl
+window-theme = dark
+
+# --------------------------
+# 窗口
+# --------------------------
+window-padding-x = 10
+window-padding-y = 8
+window-padding-balance = true
+window-save-state = always
+# 原生 macOS 标签栏，标题栏透明、融入终端背景（比自定义 tabs 样式更精致）
+macos-titlebar-style = transparent
+# 隐藏标题栏左侧的代理图标，标签栏更干净
+macos-titlebar-proxy-icon = hidden
+confirm-close-surface = true
+
+# --------------------------
+# 鼠标
+# --------------------------
+copy-on-select = clipboard
+mouse-hide-while-typing = true
+
+# --------------------------
+# 键盘
+# --------------------------
+# 让 Option 充当 Alt（Alt+b / Alt+f 按词移动等），终端里更实用
+macos-option-as-alt = true
+
+# 关键：Ctrl+Space 以传统 NUL 字节原样下发。
+# Ghostty 本身并没有绑定 Ctrl+Space，但开启 tmux extended-keys 后，
+# 不同 tmux 版本对扩展键编码的解析不一致，会表现为“前缀键失灵/被占用”。
+# 这里强制发送 \x00，任何版本的 tmux 都能识别为 C-Space 前缀。
+keybind = ctrl+space=text:\x00
+
+# --------------------------
+# 快捷终端（Quake 式下拉窗口）
+# 从任意 App 按 Cmd+Shift+Space 唤出/隐藏
+# 注意：global 快捷键需要给 Ghostty 授予“辅助功能”权限
+# --------------------------
+keybind = global:cmd+shift+space=toggle_quick_terminal
+quick-terminal-position = top
+quick-terminal-size = 35%
+quick-terminal-screen = mouse
+quick-terminal-autohide = true
+quick-terminal-animation-duration = 0.15
+# move: 跟随当前 Space 显示（remain 只留在首次打开的 Space，切桌面后会“消失”）
+quick-terminal-space-behavior = move
+
+# --------------------------
+# 通知：长命令结束后，窗口不在前台时发系统通知
+# --------------------------
+notify-on-command-finish = unfocused
+notify-on-command-finish-action = notify
+notify-on-command-finish-after = 10s
+
+# --------------------------
+# Ghostty 默认快捷键（备查，无需重复配置）
+# --------------------------
+# Cmd+T 新标签页      Cmd+W 关闭面板      Cmd+N 新窗口
+# Cmd+D 右分屏        Cmd+Shift+D 下分屏  Cmd+Shift+Enter 缩放分屏
+# Cmd+Option+方向键   在分屏间移动
+# Cmd+K 清屏          Cmd+F 搜索          Cmd+Shift+P 命令面板
+# Cmd+1..8 切换标签   Cmd+9 上一个标签
