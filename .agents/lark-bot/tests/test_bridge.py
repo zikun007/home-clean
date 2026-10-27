@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -484,3 +488,42 @@ class PipelineTests(unittest.TestCase):
                 pool.cancel_all()
                 pool.join(timeout=5)
                 state.close()
+
+
+class CheckTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = make_cfg(Path(self.tmp.name))
+        fakes = Path(__file__).resolve().parent / "fakes"
+        self.cfg.lark_cli_bin = str(fakes / "lark-cli")
+        self.cfg.codex_bin = str(fakes / "codex")
+
+    def run_check(self, **env):
+        buffer = io.StringIO()
+        with mock.patch.dict(os.environ, env):
+            with contextlib.redirect_stdout(buffer):
+                code = bridge.cmd_check(self.cfg)
+        return code, json.loads(buffer.getvalue())
+
+    def test_free_bus_passes(self):
+        code, report = self.run_check(FAKE_BUS_STATE="free")
+        self.assertEqual(report["event_bus"], "available")
+        self.assertTrue(report["ok"])
+        self.assertEqual(code, 0)
+
+    def test_occupied_bus_is_reported_as_problem(self):
+        code, report = self.run_check(FAKE_BUS_STATE="occupied")
+        self.assertEqual(report["event_bus"], "occupied_by_another_host")
+        self.assertFalse(report["ok"])
+        self.assertEqual(code, 1)
+        problem = " ".join(report["problems"])
+        self.assertIn("事件总线已被其他机器占用", problem)
+        self.assertIn("online_instance_cnt=1", problem)
+
+    def test_local_bridge_suppresses_probe(self):
+        self.cfg.pid_path.write_text(str(os.getpid()), encoding="utf-8")
+        code, report = self.run_check(FAKE_BUS_STATE="occupied")
+        self.assertEqual(report["event_bus"], "held_by_local_bridge")
+        self.assertTrue(report["ok"])
+        self.assertEqual(code, 0)

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Fake lark-cli used by unit tests.
+# FAKE_BUS_STATE=occupied|free 控制 `event consume` 的返回。
+set -u
+
+case "${1:-}" in
+    auth)
+        cat <<'JSON'
+{"ok": true, "identities": {"bot": {"status": "ready"}, "user": {"status": "ready"}}}
+JSON
+        ;;
+    event)
+        if [ "${FAKE_BUS_STATE:-free}" = "occupied" ]; then
+            cat <<'JSON' >&2
+[event] consuming as cli_test (cli_test)
+[event] local bus not found; checking remote connections...
+[event] remote connection check: online_instance_cnt=1
+{"ok": false, "error": {"type": "validation", "subtype": "failed_precondition",
+ "message": "another event bus is already connected to this app (1 remote event connection(s) detected via API)"}}
+JSON
+            exit 1
+        fi
+        echo "[event] consuming as cli_test (cli_test)"
+        ;;
+    *)
+        ;;
+esac

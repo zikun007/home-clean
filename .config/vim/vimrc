@@ -42,7 +42,11 @@ set helplang=cn,en
 " termencoding 通常保持默认即可，不必强设
 
 " ================= Clipboard =================
-set clipboard+=unnamedplus
+" 无 clipboard 特性时（部分精简版 vim / 服务器版），裸 set clipboard 只会静默无效，
+" 这里显式判断，避免复制静默失败还找不到原因。
+if has('clipboard')
+    set clipboard+=unnamedplus
+endif
 
 " ================= UI / Theme =================
 set background=dark

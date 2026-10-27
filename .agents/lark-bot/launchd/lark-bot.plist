@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  lark-bot LaunchAgent 模板（由 setup.sh 渲染后安装到 ~/Library/LaunchAgents/）
+
+  占位符：
+    __LABEL__     launchd 标签，例如 com.home-clean.lark-bot
+    __HOME__      用户主目录（launchd 不展开 ~）
+    __BOT_HOME__  运行时目录，例如 ~/.agents/lark-bot
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/bin/lark-bot</string>
+        <string>run</string>
+        <string>--no-console</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- lark-cli 是 #!/usr/bin/env node，PATH 必须包含 node 所在目录 -->
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LARK_BOT_HOME</key>
+        <string>__BOT_HOME__</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__BOT_HOME__</string>
+
+    <!-- 登录即启动；进程异常退出后自动拉起 -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- 重启间隔，避免配置错误时疯狂重试 -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__BOT_HOME__/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__BOT_HOME__/logs/launchd.log</string>
+</dict>
+</plist>

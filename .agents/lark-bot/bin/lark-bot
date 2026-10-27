@@ -15,21 +15,32 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 BOT_SRC="$(cd "$SCRIPT_DIR/.." && pwd)"
 BOT_HOME="${LARK_BOT_HOME:-$HOME/.agents/lark-bot}"
 SERVICE_NAME="${LARK_BOT_SERVICE:-lark-bot}"
+# macOS 上的 launchd 标签；setup.sh 安装时写入，手动起同名标签也可
+LAUNCHD_LABEL="${LARK_BOT_LAUNCHD_LABEL:-com.home-clean.$SERVICE_NAME}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 PID_FILE="$BOT_HOME/bridge.pid"
 CONFIG_FILE="$BOT_HOME/config.env"
+
+# 该实例是否由 launchd 托管（macOS）
+launchd_loaded() {
+    command -v launchctl >/dev/null 2>&1 || return 1
+    launchctl print "gui/$UID/$LAUNCHD_LABEL" >/dev/null 2>&1
+}
 
 usage() {
     cat <<'USAGE'
 用法: lark-bot <command>
 
   run [--no-console]   前台运行
-  start                后台启动（setsid）
-  stop                 停止后台进程
-  restart              重启
+  start                后台启动（Linux: setsid / macOS: nohup）
+  stop                 停止后台进程（launchd 托管时同时卸载）
+  restart              重启（launchd 托管时用 kickstart）
   status               查看任务/队列/进程状态
   check                检查配置、二进制和飞书鉴权
   logs                 跟踪日志
+
+macOS 上由 setup.sh 安装 LaunchAgent（com.home-clean.lark-bot），登录自启、
+崩溃自动重启；标签可用 LARK_BOT_LAUNCHD_LABEL 覆盖。
 USAGE
 }
 
@@ -72,14 +83,23 @@ case "${1:-}" in
             echo "systemd 服务 $SERVICE_NAME 已在运行；请使用 systemctl --user restart $SERVICE_NAME" >&2
             exit 1
         fi
+        if launchd_loaded; then
+            echo "launchd 已托管 $LAUNCHD_LABEL；请使用 launchctl kickstart -k gui/$UID/$LAUNCHD_LABEL 重启" >&2
+            exit 1
+        fi
         pid="$(read_pid)"
         if pid_alive "$pid"; then
             echo "已在运行 (pid=$pid)"
             exit 0
         fi
-        rm -f "$PID_FILE"
-        nohup setsid "$PYTHON_BIN" "$BOT_SRC/bridge.py" --home "$BOT_HOME" run --no-console \
-            >>"$BOT_HOME/logs/daemon.log" 2>&1 </dev/null &
+        # Linux 有 setsid，可脱离当前会话；macOS 没有 setsid，用 nohup 直接后台
+        if command -v setsid >/dev/null 2>&1; then
+            nohup setsid "$PYTHON_BIN" "$BOT_SRC/bridge.py" --home "$BOT_HOME" run --no-console \
+                >>"$BOT_HOME/logs/daemon.log" 2>&1 </dev/null &
+        else
+            nohup "$PYTHON_BIN" "$BOT_SRC/bridge.py" --home "$BOT_HOME" run --no-console \
+                >>"$BOT_HOME/logs/daemon.log" 2>&1 </dev/null &
+        fi
         echo $! > "$PID_FILE"
         sleep 1
         if pid_alive "$(read_pid)"; then
@@ -93,6 +113,13 @@ case "${1:-}" in
         fi
         ;;
     stop)
+        # launchd 托管时先卸载，否则 KeepAlive 会把进程立刻拉回来
+        if launchd_loaded; then
+            launchctl bootout "gui/$UID/$LAUNCHD_LABEL" 2>/dev/null || true
+            rm -f "$PID_FILE"
+            echo "已停止（并卸载 launchd 托管；重新登录不会再自启）"
+            exit 0
+        fi
         pid="$(read_pid)"
         if ! pid_alive "$pid"; then
             rm -f "$PID_FILE"
@@ -112,6 +139,11 @@ case "${1:-}" in
         exit 1
         ;;
     restart)
+        if launchd_loaded; then
+            launchctl kickstart -k "gui/$UID/$LAUNCHD_LABEL"
+            echo "已通过 launchd 重启 $LAUNCHD_LABEL"
+            exit 0
+        fi
         "$0" stop || true
         "$0" start
         ;;

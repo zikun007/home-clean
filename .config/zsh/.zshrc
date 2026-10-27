@@ -1,7 +1,9 @@
 # =========================================================
 # ~/.config/zsh/.zshrc
-# Optimized for WSL
+# Ubuntu Linux / macOS (Apple Silicon)
 # =========================================================
+
+[[ "$(uname -s)" == Darwin ]] && export IS_MACOS=1 || export IS_LINUX=1
 
 # ---------------------------------------------------------
 # 基础目录 / 缓存 / 历史
@@ -66,25 +68,28 @@ zstyle ':completion:*' matcher-list 'm:{a-z}={A-Z}' 'r:|[._-]=* r:|=*' 'l:|=* r:
 
 typeset -U path
 
+# 顺序：用户 bin > Homebrew > 系统。brew 须在 /usr/bin 之前，否则 git/curl 用系统旧版
 path=(
   "$HOME/.local/bin"
   "$HOME/bin"
   "$HOME/.cargo/bin"
+  ${IS_MACOS:+/opt/homebrew/bin}
   $path
 )
 
-# uv / pip 用户级路径兜底
+# uv / pip、Conda 路径兜底
 [[ -d "$HOME/.local/share/uv/tools" ]] && path=("$HOME/.local/share/uv/tools" $path)
-
-# Conda 路径兜底
 [[ -d "$HOME/miniconda3/bin" ]] && path=("$HOME/miniconda3/bin" $path)
-[[ -d "/opt/miniconda3/bin" ]] && path=("/opt/miniconda3/bin" $path)
+[[ -d /opt/miniconda3/bin ]] && path=(/opt/miniconda3/bin $path)
+
+# CUDA（仅 Linux；macOS 无 CUDA）
+if [[ -n "$IS_LINUX" ]]; then
+  export CUDA_HOME=/usr/local/cuda
+  [[ -d "$CUDA_HOME/bin" ]] && path=("$CUDA_HOME/bin" $path)
+  [[ -d "$CUDA_HOME/lib64" ]] && export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 export PATH=${(j.:.)path}
-
-# ---------------------------------------------------------
-# 开发环境变量
-# ---------------------------------------------------------
 
 # ---------------------------------------------------------
 # nvm —— 惰性加载：首次调用 nvm/node/npm 等命令时才真正加载 nvm.sh
@@ -94,9 +99,13 @@ export PATH=${(j.:.)path}
 export NVM_DIR="$HOME/.config/nvm"
 export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 
-_nvm_default_bin="$NVM_DIR/versions/node/v24.21.0/bin"
-[[ -d "$_nvm_default_bin" ]] && path=("$_nvm_default_bin" $path)
-unset _nvm_default_bin
+# 把已安装的最新版本注入 PATH，node/npm 立即可用（新机器未装 nvm 时自动跳过）
+if [[ -d "$NVM_DIR/versions/node" ]]; then
+  _nvm_latest=$(print -l "$NVM_DIR"/versions/node/*(N/:t) | sort -V | tail -1)
+  [[ -n "$_nvm_latest" && -d "$NVM_DIR/versions/node/$_nvm_latest/bin" ]] \
+    && path=("$NVM_DIR/versions/node/$_nvm_latest/bin" $path)
+  unset _nvm_latest
+fi
 
 _nvm_lazy() {
   unset -f nvm node npm npx pnpm yarn corepack
@@ -107,22 +116,6 @@ for _cmd in nvm node npm npx pnpm yarn corepack; do
   eval "${_cmd}() { _nvm_lazy; ${_cmd} \$@; }"
 done
 unset _cmd
-
-
-# CUDA
-export CUDA_HOME=/usr/local/cuda
-if [[ -d "$CUDA_HOME/bin" ]]; then
-  path=("$CUDA_HOME/bin" $path)
-fi
-if [[ -d "$CUDA_HOME/lib64" ]]; then
-  export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
-
-
-# homebrew
-if [[ -d "/opt/homebrew/bin" ]]; then
-    path=("/opt/homebrew/bin" $path)
-fi
 
 # ---------------------------------------------------------
 # Powerlevel10k instant prompt
@@ -247,17 +240,22 @@ proxy_off() {
 # ---------------------------------------------------------
 alias ..='cd ..'
 alias ...='cd ../..'
-alias l='ls -al'
-alias ll='ls -alFh'
-alias lt='ls -ltrh'
+# 没有 eza 时退回系统 ls（Ubuntu 22.04 官方源没有 eza）
+if (( $+commands[eza] )); then
+  alias ls='eza'
+  # eza 的 -F 是 --classify[=WHEN]，可选参数会吞掉紧跟字符，-alFh 会被当成 -F h 报错
+  alias ll='ls -al --header'
+  alias lt='ls -l --sort=oldest --header'
+else
+  alias ll='ls -alFh'
+  alias lt='ls -ltrh'
+fi
 alias cls='clear'
 
-# 仅当 fdfind 存在时提供 fd 别名
-if (( $+commands[fdfind] )); then
-  alias fd='fdfind'
-fi
-alias bat='batcat'
-alias ls='eza'
+# Debian/Ubuntu 打包名是 fdfind / batcat，macOS(brew) 是 fd / bat
+(( $+commands[fdfind] )) && alias fd='fdfind'
+(( $+commands[batcat] )) && alias bat='batcat'
+(( $+commands[python] )) && alias py='python' || alias py='python3'
 
 # zoxide 直连原生命令的别名（z/zi 已由 init 提供）
 alias za='zoxide add'
@@ -280,20 +278,21 @@ alias zshreload='source "$ZDOTDIR/.zshrc"'
 alias tmuxconfig='vim "$XDG_CONFIG_HOME/tmux/tmux.conf"'
 alias tmuxreload='tmux source-file "$XDG_CONFIG_HOME/tmux/tmux.conf"'
 
-# process / disk
+# process / disk（BSD du 只认 -d，GNU 用 --max-depth）
 alias psg='ps aux | grep -i'
 alias df='df -h'
-alias du='du -h --max-depth=1'
+[[ -n "$IS_MACOS" ]] && alias du='du -h -d 1' || alias du='du -h --max-depth=1'
 
-# ROS / colcon
-alias cw='cd ~/ros2_ws'
-alias cs='cd ~/ros2_ws/src'
-alias cb='colcon build --symlink-install'
-alias cbs='colcon build --symlink-install --packages-select'
-alias sb='source ~/ros2_ws/install/setup.zsh'
+# ROS / colcon（仅 Linux）
+if [[ -n "$IS_LINUX" ]]; then
+  alias cw='cd ~/ros2_ws'
+  alias cs='cd ~/ros2_ws/src'
+  alias cb='colcon build --symlink-install'
+  alias cbs='colcon build --symlink-install --packages-select'
+  alias sb='source ~/ros2_ws/install/setup.zsh'
+fi
 
 # Python / uv
-alias py='python'
 alias venv='uv venv'
 alias urun='uv run'
 alias uadd='uv add'

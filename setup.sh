@@ -135,6 +135,25 @@ decide_component() {
     fi
 }
 
+# 生成并加载 launchd LaunchAgent（macOS）
+# $1=标签 $2=运行时目录
+install_launchagent() {
+    local label="$1" bot_home="$2"
+    local plist="$HOME/Library/LaunchAgents/$label.plist"
+    mkdir -p "$HOME/Library/LaunchAgents" "$bot_home/logs"
+    sed -e "s|__LABEL__|$label|g" \
+        -e "s|__HOME__|$HOME|g" \
+        -e "s|__BOT_HOME__|$bot_home|g" \
+        "$DOTFILES_DIR/.agents/lark-bot/launchd/lark-bot.plist" > "$plist"
+    # 先卸载旧实例，再按新 plist 加载
+    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+    if launchctl bootstrap "gui/$UID" "$plist" 2>/dev/null; then
+        echo -e "${GREEN}  [OK] LaunchAgent 已加载: $label（登录自启 + 崩溃自动重启）${NC}"
+    else
+        echo -e "${YELLOW}  [提示] 已写入 $plist，重新登录后生效；或手动 launchctl bootstrap gui/$UID $plist${NC}"
+    fi
+}
+
 install_lark_bot() {
     echo -e "\n${BLUE}>>> 4. 部署 .agents/lark-bot 运行时...${NC}"
     mkdir -p "$LARK_BOT_HOME/logs" "$LARK_BOT_HOME/memory"
@@ -148,7 +167,9 @@ install_lark_bot() {
     ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/lark-bot"
     echo -e "${GREEN}  [链接] ~/.local/bin/lark-bot${NC}"
 
-    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    if [ -n "$IS_MACOS" ]; then
+        install_launchagent "com.home-clean.lark-bot" "$LARK_BOT_HOME"
+    elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
         mkdir -p "$HOME/.config/systemd/user"
         install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/lark-bot.service" \
             "$HOME/.config/systemd/user/lark-bot.service"
@@ -169,7 +190,9 @@ install_omp_bot() {
     fi
     ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/omp-lark-bot"
     echo -e "${GREEN}  [链接] ~/.local/bin/omp-lark-bot${NC}"
-    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    if [ -n "$IS_MACOS" ]; then
+        install_launchagent "com.home-clean.omp-lark-bot" "$OMP_BOT_HOME"
+    elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
         mkdir -p "$HOME/.config/systemd/user"
         install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/omp-lark-bot.service" \
             "$HOME/.config/systemd/user/omp-lark-bot.service"
@@ -186,14 +209,27 @@ install_deps_linux() {
     # 先检测缺失的包，避免每次全量 sudo apt update
     local missing=""
     local pkg
+    # 基础工具；fzf 供 .zshrc 的 fzf/fzf-tab 插件使用
     local aliases=(zsh:zsh tmux:tmux vim:vim git:git curl:curl wget:wget xclip:xclip fontconfig:fontconfig \
-        eza:eza fd-find:fd-find bat:bat ripgrep:ripgrep btop:btop)  # tree 由 eza -T 替代
+        fzf:fzf eza:eza fd-find:fd-find bat:bat ripgrep:ripgrep btop:btop)
+    # C++ 工具链：编译器 + 构建 + 调试 + 静态分析 + 格式化
+    aliases+=(build-essential:build-essential cmake:cmake ninja-build:ninja-build \
+        gdb:gdb clang:clang clangd:clangd clang-format:clang-format clang-tidy:clang-tidy \
+        ccache:ccache pkg-config:pkg-config lcov:lcov)
     for pkg in "${aliases[@]}"; do
         command -v "${pkg%%:*}" &>/dev/null || dpkg -s "${pkg##*:}" &>/dev/null || missing+=" ${pkg##*:}"
     done
     if [ -n "$missing" ]; then
         sudo apt update
-        sudo apt install -y $missing
+        # 逐个安装：批量装时只要有一个包在源里不存在（如 22.04 的 eza），
+        # 整条 apt install 会失败，导致 cmake/clang 这类关键包也装不上。
+        local failed=""
+        for pkg in $missing; do
+            if ! sudo apt install -y "$pkg"; then
+                failed+=" $pkg"
+            fi
+        done
+        [ -n "$failed" ] && echo -e "${YELLOW}  [提示] 以下包安装失败（可能需第三方源）:$failed${NC}" >&2
     else
         echo -e "${GREEN}  [OK] 系统依赖已全部安装${NC}"
     fi
@@ -201,11 +237,43 @@ install_deps_linux() {
 
 install_deps_macos() {
     echo -e "\n${BLUE}>>> 0. 安装基础系统依赖 (通过 Homebrew)...${NC}"
+    # 脚本里通常没跑过 shellenv，brew 可能装了但不在 PATH
+    if ! command -v brew &> /dev/null && [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    fi
     if ! command -v brew &> /dev/null; then
         echo -e "${YELLOW}  [安装] 未检测到 Homebrew，正在安装...${NC}"
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
     fi
-    brew install zsh tmux vim git wget eza fd bat ripgrep btop fontconfig  # tree 由 eza -T 替代
+    if ! command -v brew &> /dev/null; then
+        echo -e "${RED}  [失败] Homebrew 不可用，请手动安装后重跑${NC}" >&2
+        return 1
+    fi
+    # 国内直连 ghcr.io 拉 bottle 经常只有几十 KB/s，换镜像可快 2-3 个数量级。
+    # 已显式设置过的用户不覆盖。
+    if [ -z "${HOMEBREW_BOTTLE_DOMAIN:-}" ]; then
+        export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
+    fi
+    # 只装缺失的，避免每次全量升级
+    local missing=()
+    local formula
+    # C++ 工具链。macOS CLT 已提供 clang / clang++ / clangd / lldb / make，
+    # 这里只补 CLT 没有的：cmake/ninja 构建、clang-format 格式化、ccache 加速。
+    # 不要装 llvm：那是整套 1.8GB 的 clang，而 clang-format 独立包只有 3.8MB。
+    for formula in zsh tmux vim git wget fzf eza fd bat ripgrep btop fontconfig \
+        cmake ninja clang-format ccache pkg-config; do
+        brew list --formula "$formula" &>/dev/null || missing+=("$formula")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        brew install "${missing[@]}"
+    else
+        echo -e "${GREEN}  [OK] 系统依赖已全部安装${NC}"
+    fi
+    # Xcode CLT 必须先装，否则 clang/clang++/make 全都不存在
+    if ! xcode-select -p >/dev/null 2>&1; then
+        echo -e "${YELLOW}  [提示] 未安装 Xcode Command Line Tools，执行:xcode-select --install${NC}" >&2
+    fi
 }
 
 if [[ -n "$IS_LINUX" ]]; then
@@ -255,7 +323,8 @@ safe_link() {
 }
 
 # ==========================================
-# 1. 处理 .config 下的文件夹
+# 1. 处理 .config 下的内容
+# 目录整目录软链；点文件（如 .clang-format）单独链接，否则会被漏掉
 # ==========================================
 echo -e "\n${BLUE}>>> 1. 部署 .config 目录...${NC}"
 for folder in "$DOTFILES_DIR"/.config/*; do
@@ -264,6 +333,9 @@ for folder in "$DOTFILES_DIR"/.config/*; do
         safe_link "$folder" "$HOME/.config/$base_name"
     fi
 done
+# clang-format 只从源文件目录向上查找 .clang-format（不读 XDG），
+# 所以必须放到 $HOME 才能在任意项目里生效
+safe_link "$DOTFILES_DIR/.config/.clang-format" "$HOME/.clang-format"
 
 # ==========================================
 # 2. 处理 .local 下的内容：复制（非软链）
@@ -308,6 +380,20 @@ done
 echo -e "\n${BLUE}>>> 3. 部署根目录配置文件...${NC}"
 safe_link "$DOTFILES_DIR/.zshenv" "$HOME/.zshenv"
 
+# npm 全局前缀：官方 pkg 装的 node 前缀是 /usr/local（root 所有），
+# 不加这一步 `npm i -g` 必然 EACCES。只补 prefix，不动已有的 registry 设置。
+NPMRC="$HOME/.config/npm/npmrc"
+if [ ! -f "$NPMRC" ]; then
+    mkdir -p "$(dirname "$NPMRC")"
+    printf 'prefix=${HOME}/.local\n' > "$NPMRC"
+    echo -e "${GREEN}  [写入] $NPMRC (prefix=\${HOME}/.local)${NC}"
+elif ! grep -q '^prefix=' "$NPMRC"; then
+    printf 'prefix=${HOME}/.local\n' >> "$NPMRC"
+    echo -e "${GREEN}  [追加] $NPMRC (prefix=\${HOME}/.local)${NC}"
+else
+    echo -e "${GREEN}  [OK] 已存在: $NPMRC${NC}"
+fi
+
 # ==========================================
 # 4. 可选组件：lark-bot（Codex 版）
 # 仓库只保存源码；配置/状态/日志/记忆放在 ~/.agents/lark-bot
@@ -344,19 +430,26 @@ else
 fi
 
 # ==========================================
-# 5. 刷新字体缓存（字体已由第 2 步从仓库复制到 ~/.local/share/fonts）
+# 5. 字体注册
+# Linux: ~/.local/share/fonts + fc-cache
+# macOS: 系统只扫描 ~/Library/Fonts，额外复制一份过去
 # ==========================================
-if ls "$HOME"/.local/share/fonts/*.ttf &>/dev/null; then
-    if command -v fc-cache &>/dev/null; then
+FONT_SRC_DIR="$HOME/.local/share/fonts"
+if ls "$FONT_SRC_DIR"/*.ttf &>/dev/null; then
+    if [ -n "$IS_MACOS" ]; then
+        echo -e "\n${BLUE}>>> 5. 注册字体到 ~/Library/Fonts (macOS)...${NC}"
+        mkdir -p "$HOME/Library/Fonts"
+        # -n 保留本地已有文件
+        cp -n "$FONT_SRC_DIR"/*.ttf "$HOME/Library/Fonts/" && echo -e "${GREEN}  [完成] 字体已注册${NC}"
+    elif command -v fc-cache &>/dev/null; then
         fc-cache -f >/dev/null 2>&1
         echo -e "\n${BLUE}>>> 5. 字体已部署，缓存已刷新${NC}"
-        # fontconfig 的字体列表缓存在 gnome-terminal-server 启动时加载并常驻，
-        # 只刷新磁盘缓存不会让已在运行的终端看到新字体（首选项里会显示旧名字
-        # 或直接回退到 Noto）。必须重启终端服务器进程。
-        echo -e "${YELLOW}  [注意] 已运行的终端不会自动感知新字体：请完全退出所有终端窗口后重新打开${NC}"
+    else
+        echo -e "\n${YELLOW}>>> 5. [提示] 未安装 fontconfig，跳过 fc-cache${NC}"
     fi
+    echo -e "${YELLOW}  [注意] 已运行的终端启动时才加载字体列表，请完全退出后重新打开${NC}"
 else
-    echo -e "\n${YELLOW}>>> 5. [提示] ~/.local/share/fonts 无字体文件${NC}"
+    echo -e "\n${YELLOW}>>> 5. [提示] $FONT_SRC_DIR 无字体文件${NC}"
 fi
 
 # ==========================================
@@ -389,13 +482,22 @@ fi
 # 7. 切换默认 Shell
 # ==========================================
 ZSH_BIN="$(command -v zsh)"
-if [ -n "$ZSH_BIN" ] && [ "$(readlink -f "$SHELL")" != "$(readlink -f "$ZSH_BIN")" ]; then
+# 用 python3 解析真实路径：BSD readlink 的 -f 在旧 macOS 上不可靠
+real_path() {
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || printf '%s' "$1"
+}
+if [ -n "$ZSH_BIN" ] && [ "$(real_path "$SHELL")" != "$(real_path "$ZSH_BIN")" ]; then
+    ZSH_REAL="$(real_path "$ZSH_BIN")"
     echo -e "${YELLOW}>>> 将 Zsh 设置为默认 Shell...${NC}"
-    if [[ -n "$IS_MACOS" ]]; then
-        # macOS 自带的 zsh 在 /etc/shells 白名单内，可直接切换
-        chsh -s "$ZSH_BIN"
+    if [ -n "$IS_MACOS" ]; then
+        # macOS 只接受 /etc/shells 白名单内的 shell；brew 的 zsh 默认不在其中
+        if [[ "$ZSH_REAL" == /opt/homebrew/* ]] && ! grep -qx "$ZSH_REAL" /etc/shells; then
+            echo -e "${YELLOW}  需要先执行: echo $ZSH_REAL | sudo tee -a /etc/shells${NC}"
+        else
+            chsh -s "$ZSH_REAL"
+        fi
     else
-        sudo chsh -s "$ZSH_BIN" "$USER"
+        sudo chsh -s "$ZSH_REAL" "$USER"
     fi
     echo -e "${GREEN}  设置完成，重新登录后生效。${NC}"
 fi

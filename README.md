@@ -14,10 +14,14 @@
 ## 🌟 核心特性 (Key Features)
 
 - **跨平台自适应:** `setup.sh` 自动检测操作系统——Ubuntu 使用 `apt`，macOS 使用 `Homebrew`；`.zshrc` 中通过 `IS_MACOS` / `IS_LINUX` 自动切换平台专属配置（Homebrew、CUDA、ROS2 等），一套配置走天下。
-- **一键部署 (One-Click Setup):** 自动安装必备软件（Zsh, Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop 等），部署字体到 ~/.local/share/fonts，并完成 .config 软链映射与 .local 数据复制。
+- **一键部署 (One-Click Setup):** 自动安装必备软件（Zsh, Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop 等），部署字体（Linux 到 `~/.local/share/fonts` + `fc-cache`，macOS 到 `~/Library/Fonts`），并完成 .config 软链映射与 .local 数据复制。
 - **高效 Shell 体验:** 基于 Zsh + Oh My Zsh，预装语法高亮、自动建议补全、fzf-tab 与 Vi Mode，配合 `zoxide` 实现目录秒级智能跳转。
 - **现代终端工具链:** 自动用 `eza` 接管 `ls`、`fd` 接管 `find`、`bat` 接管 `cat`、`rg` 接管 `grep`、`btop` 接管 `top`，并兼容 Ubuntu 打包名（`fdfind` / `batcat`）。
 - **终端复用:** 精心配置的 Tmux 方案，支持鼠标操作、一键分屏及会话保持，极大提升远程调试效率。
+- **C++ 工具链:** 自动安装编译器 / 构建 / 调试 / 静态分析完整链路——`build-essential`（Linux）、
+  `cmake`、`ninja`、`clang`、`clangd`、`clang-format`、`clang-tidy`、`ccache`、`pkg-config`、`lcov`、`gdb`。
+  仓库自带 `.clang-format` 会链接到 `~/.clang-format`（clang-format 不读 XDG，只向上查找父目录）。
+  macOS 复用系统 CLT 的 clang/clangd/lldb/make，只补 CLT 缺的部件，不装 1.8GB 的 `llvm`。
 - **轻量级编辑:** 针对 C++ 开发优化的纯 Vim 配置，支持基础语法高亮，拒绝臃肿。
 - **SLAM 友好:** 包含常用的 CMake、GDB 调试别名及 ROS2 环境变量快速加载脚本（仅在检测到 `/opt/ros` 时生效）。
 
@@ -28,17 +32,25 @@ home-clean/
 ├── LICENSE
 ├── README.md
 ├── README_en.md
-├── .config/            # 存放应用核心配置（XDG 规范布局，软链到 ~/.config）
-│   ├── fontconfig/      # 旧字体家族名别名（避免升级后回退到 Noto）
-│   ├── git/             # git 详细配置
-│   ├── tmux/            # Tmux 详细配置与插件
-│   ├── vim/             # Vim 纯净版配置
-│   └── zsh/             # Zsh 主题、Oh My Zsh 与插件
-├── .local/              # 存放本地数据与资产（复制到 ~/.local，不覆盖已有内容）
-│   ├── share/fonts/     # 终端字体 (FiraCode Nerd Font Mono、宋体)
-│   └── share/zsh/       # zsh 历史
-├── .zshenv              # Zsh 环境变量入口
-└── setup.sh             # 跨平台部署与安装脚本
+├── AGENTS.md             # Agent 协作规范（memory / project / rules 三目录约定）
+├── .config/              # 应用核心配置（XDG 布局，整目录软链到 ~/.config）
+│   ├── .clang-format     # C++ 格式化规则（链到 ~/.clang-format，clang-format 不读 XDG）
+│   ├── fontconfig/       # 旧字体家族名别名（避免升级后回退到 Noto）
+│   ├── ghostty/          # Ghostty 终端（macOS 专用键在 Linux 上被忽略）
+│   ├── git/              # git 详细配置
+│   ├── tmux/             # Tmux 详细配置与插件
+│   ├── vim/              # Vim 纯净版配置
+│   └── zsh/              # Zsh 主题、Oh My Zsh 与插件
+├── .agents/              # Agent 资产
+│   ├── lark-bot/         # 飞书 ↔ 助手桥接（源码 / 测试 / systemd / launchd）
+│   ├── memory/           # 开发进度与调试记录
+│   ├── project/          # 经审核的整体方案
+│   └── rules/            # 语言级编码规范
+├── .local/               # 本地数据与资产（复制到 ~/.local，不覆盖已有内容）
+│   ├── share/fonts/      # 终端字体 (FiraCode Nerd Font Mono、宋体)
+│   └── share/zsh/        # zsh 历史
+├── .zshenv               # Zsh 环境变量入口
+└── setup.sh              # 跨平台部署与安装脚本
 ```
 
 ## 🚀 快速开始 (Quick Start)
@@ -76,12 +88,35 @@ lark-bot status
 
 `setup.sh` 可反复执行：每次都重新询问可选组件，已有的 `config.env`、日志、数据库、会话数据不会被覆盖；跳过只是本次不安装，不会卸载。
 
+**开机自启**：Linux 写 systemd unit（`~/.config/systemd/user/lark-bot.service`，需手动 `enable`）；
+macOS 写 launchd LaunchAgent（`~/Library/LaunchAgents/com.home-clean.lark-bot.plist`）并立即加载，
+登录自启、崩溃 10 秒内自动重启。`lark-bot stop` 会连同托管一起卸载，`restart` 走托管原生重启。
+
+> **多机注意：** 飞书的事件总线对同一个 app 全局只允许一个消费者，本机 `lark-bot start` 前先确认另一台机器的 `lark-bot` 已停。`lark-bot check` 会检测并在冲突时报 `event_bus: occupied_by_another_host`。
+
 ## 🔧 平台差异说明
 
-| 功能 | Ubuntu Linux | macOS (Apple Silicon) |
+`.zshrc` 开头用 `uname` 设置 `IS_MACOS` / `IS_LINUX`，所有平台差异都基于它们；`setup.sh` 用同一套判断。
+
+| 功能 | Ubuntu Linux | macOS |
 |---|---|---|
-| 包管理 | `apt` | `Homebrew` (/opt/homebrew) |
-| PATH 增强 | CUDA、Conda、ROS2 | Homebrew、VS Code CLI、Conda |
-| 字体缓存 | `fc-cache` 手动刷新 | 系统自动扫描用户字体目录 |
-| bat / fd 命令名 | `batcat` / `fdfind`（已自动 alias） | `bat` / `fd` |
-| du 别名 | `--max-depth=1` | `-d 1` |
+| 包管理 | `apt`（`fd-find` / `bat`） | `Homebrew`（`fd` / `bat`） |
+| Homebrew 路径 | — | `/opt/homebrew`（仅 Apple Silicon） |
+| 字体注册 | 复制到 `~/.local/share/fonts` + `fc-cache -f` | 复制到 `~/Library/Fonts`（系统不扫描 `~/.local/share/fonts`） |
+| `bat` / `fd` | 打包名 `batcat` / `fdfind`，按存在与否自动 alias | 原生名，无需 alias |
+| `du` | `--max-depth=1` | `-d 1`（BSD du 不认 `--max-depth`） |
+| `py` | 优先 `python`，否则 `python3` | `python3`（系统不提供 `python`） |
+| CUDA / `LD_LIBRARY_PATH` | 检测 `/usr/local/cuda` 后注入 | 整个逻辑跳过 |
+| ROS2 / colcon 别名 | `cw` `cs` `cb` `cbs` `sb` | 不定义（macOS 无 ROS2） |
+| `ll` / `lt` | `eza -al --header` / `eza -l --sort=oldest --header` | 同左 |
+| 默认 Shell 切换 | `sudo chsh` | `chsh`，brew zsh 需先写入 `/etc/shells` |
+| C++ 编译器 | `build-essential`（gcc/g++） | Xcode CLT 的 `clang` / `clang++` |
+| C++ 调试器 | `gdb` | `lldb`（CLT 自带，macOS 无 gdb） |
+| C++ 构建 | `cmake` + `ninja-build` | `cmake` + `ninja` |
+| 静态分析 / 格式化 | `clangd`、`clang-format`、`clang-tidy` | `clangd` 用 CLT，`clang-format` 单独装（不装 `llvm`） |
+| Homebrew 镜像 | — | 未设置 `HOMEBREW_BOTTLE_DOMAIN` 时用 TUNA，避免 ghcr 龟速 |
+
+`ll` 用 `--header` 而非 `-h`：`eza` 的 `-F`（`--classify[=WHEN]`）是可选参数，写成 `-alFh` 会被解析成 `-F h` 并直接报错。
+
+`apt install` 逐步逐包执行：批量安装时只要有一个包在源里缺失（22.04 的 `eza`），整条命令会失败，
+连 `cmake`、`clang` 都装不上。

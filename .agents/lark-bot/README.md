@@ -41,13 +41,14 @@ ln -sfn "$PWD/.agents/lark-bot/bin/lark-bot" ~/.local/bin/lark-bot
 ```
 
 脚本可反复执行：每次重新询问，已有 `config.env`、`logs/`、`state.db`、会话数据不覆盖；
-结束时打印各组件状态（已部署 / 已跳过）。systemd 服务只做 `daemon-reload`，不自动 `enable`。
+结束时打印各组件状态（已部署 / 已跳过）。Linux 写 systemd unit（只 `daemon-reload`，不自动 `enable`），
+macOS 写 launchd LaunchAgent 并立即加载。
 
 编辑 `~/.agents/lark-bot/config.env`，至少填写：
 
 ```bash
 OWNER_ID=ou_xxx
-WORKDIR=/home/horizon/workspace
+WORKDIR=~/Workspace        # 换成你的工作区
 ```
 
 然后：
@@ -133,16 +134,53 @@ memory/        按 chat 的长期记忆
 bridge.pid     后台进程 PID
 ```
 
-## systemd
+## 开机自启
 
-`setup.sh` 会把 unit 安装到 `~/.config/systemd/user/lark-bot.service`。启用：
+两个平台各用各的托管方式，`setup.sh` 按检测结果自动安装。
+
+**Linux（systemd）** — unit 装到 `~/.config/systemd/user/lark-bot.service`：
 
 ```bash
 systemctl --user enable --now lark-bot
 systemctl --user status lark-bot
 ```
 
-如果不使用 systemd，`lark-bot start/stop` 使用 `setsid` 后台运行。
+**macOS（launchd）** — LaunchAgent 装到 `~/Library/LaunchAgents/com.home-clean.lark-bot.plist`，
+登录即启动，崩溃后 10 秒内自动重启：
+
+```bash
+launchctl print gui/$UID/com.home-clean.lark-bot     # 查看运行状态
+launchctl kickstart -k gui/$UID/com.home-clean.lark-bot   # 重启
+```
+
+LaunchAgent 的 PATH 里显式包含 `/opt/homebrew/bin` 和 `/usr/local/bin`：`lark-cli` 是
+`#!/usr/bin/env node`，launchd 的默认 PATH 找不到 node 就会一直报
+`env: node: No such file or directory`。
+
+两种托管都就绪时，`lark-bot stop` 会连同托管一起卸载（否则 KeepAlive 立刻把进程拉回来），
+`lark-bot restart` 则走托管的原生重启。不用托管时 `lark-bot start/stop` 仍然可用
+（Linux 优先 `setsid`，macOS 退回 `nohup`）。
+
+## 事件总线冲突（多机部署必读）
+
+飞书的长连接事件总线对同一个 app **全局只允许一个消费者**。如果同一个 app 在另一台机器上
+已经跑着 `lark-bot`，本机订阅会一直失败：
+
+```text
+[event] remote connection check: online_instance_cnt=1
+another event bus is already connected to this app
+```
+
+关键点：`lark-cli event status` / `event stop` **只能看/停本机**的总线，对远端那台无效
+（会显示 `not_running` / `no_bus`）。平台的 `online_instance_cnt` 是唯一的线索。
+
+`lark-bot check` 会做一次 3 秒的真实订阅试探，冲突时直接报
+`event_bus: occupied_by_another_host` 并写明处理方式。两种解决办法：
+
+1. 停掉另一台机器上的消费者（`lark-bot stop`；systemd 用 `systemctl --user stop lark-bot`，
+   launchd 用 `lark-bot stop` 或 `launchctl bootout gui/$UID/com.home-clean.lark-bot`），
+   然后在本机 `lark-bot restart`；
+2. 给本机一个独立的飞书 app（`lark-cli config init --new`），两台机器各用各的事件总线。
 
 ## 测试
 
@@ -150,7 +188,7 @@ systemctl --user status lark-bot
 python3 -m unittest discover -s .agents/lark-bot/tests -v
 ```
 
-假集成测试使用 `tests/fakes/codex`，不会访问真实飞书。
+假集成测试使用 `tests/fakes/codex` 和 `tests/fakes/lark-cli`，不会访问真实飞书。
 
 ## 安全边界
 

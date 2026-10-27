@@ -1444,6 +1444,36 @@ def cmd_check(cfg: Config) -> int:
                 problems.append("无法解析 lark-cli auth status 输出")
     except Exception as exc:  # noqa: BLE001
         problems.append(f"lark-cli auth status 异常: {exc}")
+    # 事件总线全局唯一：同一 app 上已有别的机器在消费时，本机永远连不上。
+    # 平台只暴露 online_instance_cnt，`lark-cli event status/stop` 只能看本机，
+    # 所以这里做一次短时限的真实订阅试探，把冲突提前暴露给用户。
+    local_pid = read_pid(cfg)
+    if pid_alive(local_pid):
+        # 本机 bridge 自己就占着总线，再试探只会和自己冲突
+        checks["event_bus"] = "held_by_local_bridge"
+    else:
+        try:
+            probe = subprocess.run(
+                cfg.lark_args("event", "consume", "im.message.receive_v1",
+                              "--as", "bot", "--timeout", "3s"),
+                capture_output=True, text=True, timeout=30, env=cfg.feishu_env(),
+            )
+            output = f"{probe.stdout}\n{probe.stderr}"
+            if "another event bus is already connected" in output:
+                match = re.search(r"online_instance_cnt=(\d+)", output)
+                checks["event_bus"] = "occupied_by_another_host"
+                problems.append(
+                    "事件总线已被其他机器占用"
+                    + (f"（online_instance_cnt={match.group(1)}）" if match else "")
+                    + "：同一 app 只允许一个消费者，请先停掉那台机器上的 lark-bot / lark-cli event，"
+                      "或为本机换用独立 app"
+                )
+            elif re.search(r"consuming as |已就绪", output):
+                checks["event_bus"] = "available"
+            else:
+                checks["event_bus"] = "unknown"
+        except Exception as exc:  # noqa: BLE001
+            checks["event_bus"] = f"error: {exc}"
     checks["problems"] = problems
     checks["ok"] = not problems
     print(json.dumps(checks, ensure_ascii=False, indent=2))
