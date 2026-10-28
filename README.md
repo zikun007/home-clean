@@ -14,7 +14,7 @@
 ## 🌟 核心特性 (Key Features)
 
 - **跨平台自适应:** `setup.sh` 自动检测操作系统——Ubuntu 使用 `apt`，macOS 使用 `Homebrew`；`.zshrc` 中通过 `IS_MACOS` / `IS_LINUX` 自动切换平台专属配置（Homebrew、CUDA、ROS2 等），一套配置走天下。
-- **一键部署 (One-Click Setup):** 自动安装必备软件（Zsh, Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop 等），部署字体（Linux 到 `~/.local/share/fonts` + `fc-cache`，macOS 到 `~/Library/Fonts`），并完成 .config 软链映射与 .local 数据复制。
+- **一键部署 (One-Click Setup):** 自动安装必备软件（Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop 等；Linux 额外装 zsh，macOS 直接用系统自带 `/bin/zsh`），部署字体（Linux 到 `~/.local/share/fonts` + `fc-cache`，macOS 到 `~/Library/Fonts`），并完成 .config 软链映射与 .local 数据复制。
 - **高效 Shell 体验:** 基于 Zsh + Oh My Zsh，预装语法高亮、自动建议补全、fzf-tab 与 Vi Mode，配合 `zoxide` 实现目录秒级智能跳转。
 - **现代终端工具链:** 自动用 `eza` 接管 `ls`、`fd` 接管 `find`、`bat` 接管 `cat`、`rg` 接管 `grep`、`btop` 接管 `top`，并兼容 Ubuntu 打包名（`fdfind` / `batcat`）。
 - **终端复用:** 精心配置的 Tmux 方案，支持鼠标操作、一键分屏及会话保持，极大提升远程调试效率。
@@ -94,6 +94,12 @@ macOS 写 launchd LaunchAgent（`~/Library/LaunchAgents/com.home-clean.lark-bot.
 
 > **多机注意：** 飞书的事件总线对同一个 app 全局只允许一个消费者，本机 `lark-bot start` 前先确认另一台机器的 `lark-bot` 已停。`lark-bot check` 会检测并在冲突时报 `event_bus: occupied_by_another_host`。
 
+> **双实例：** 同一台机器可同时跑 `lark-bot`（如 local-codex）和 `omp-lark-bot`（local-omp），
+> 前提是两者使用**不同的飞书 app**（各自的 `LARK_PROFILE`）。事件总线按 appId 隔离，
+> 所以互不冲突；共用同一个 app 才会报 `occupied_by_another_host`。
+> `omp-lark-bot` 按调用名自动推断 `LARK_BOT_HOME=~/.omp/lark-bot` 和 launchd 标签
+> `com.home-clean.omp-lark-bot`，两个实例的 `status` / `stop` / `restart` 互不影响。
+
 ## 🔧 平台差异说明
 
 `.zshrc` 开头用 `uname` 设置 `IS_MACOS` / `IS_LINUX`，所有平台差异都基于它们；`setup.sh` 用同一套判断。
@@ -109,7 +115,7 @@ macOS 写 launchd LaunchAgent（`~/Library/LaunchAgents/com.home-clean.lark-bot.
 | CUDA / `LD_LIBRARY_PATH` | 检测 `/usr/local/cuda` 后注入 | 整个逻辑跳过 |
 | ROS2 / colcon 别名 | `cw` `cs` `cb` `cbs` `sb` | 不定义（macOS 无 ROS2） |
 | `ll` / `lt` | `eza -al --header` / `eza -l --sort=oldest --header` | 同左 |
-| 默认 Shell 切换 | `sudo chsh` | `chsh`，brew zsh 需先写入 `/etc/shells` |
+| 默认 Shell | 装 `zsh` 后用 `sudo chsh` 切换 | 系统自带 `/bin/zsh`，不装 brew zsh、不改默认 Shell |
 | C++ 编译器 | `build-essential`（gcc/g++） | Xcode CLT 的 `clang` / `clang++` |
 | C++ 调试器 | `gdb` | `lldb`（CLT 自带，macOS 无 gdb） |
 | C++ 构建 | `cmake` + `ninja-build` | `cmake` + `ninja` |

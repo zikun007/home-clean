@@ -95,3 +95,46 @@
 
 验证：`cmake -G Ninja` 真实编译并运行 C++17 程序成功；`clang-format --style=file` 读到仓库样式
 （Tab 缩进）；沙箱 HOME 下新 shell 正确加载 `ZDOTDIR`/`IS_MACOS`/别名。
+
+## 2026-10-28 · 移除 brew zsh（macOS 用系统自带）
+
+用户要求：macOS 自带 `/bin/zsh`，不再安装 brew zsh，也不做默认 Shell 切换。
+
+- `setup.sh` macOS formula 清单去掉 `zsh`（Linux 清单保留，Ubuntu 默认是 bash）。
+- 第 7 节改为：macOS 只检测 `$SHELL` 是否 `/bin/zsh` 并打印提示，绝不 `chsh`；
+  Linux 仍是 `sudo chsh`（已是 zsh 时也打印 OK）。
+- 顺带修掉原代码的 bash 花括号 bug：`"...为 $SHELL，macOS..."` 会把全角逗号吞进变量名，
+  输出成乱码 → 改 `${SHELL}`。
+- 根因补充：两套 zsh（5.9 与 5.9.2）共用 `ZSH_COMPDUMP` 和 p10k 的 `.zwc`，
+  导致 `zrecompile: zcompile:99: zwc file has wrong version`。
+
+已执行：`brew uninstall zsh`（1,613 文件 / 16.2MB）。`/etc/shells` 未含 brew 路径，
+`UserShell` 一直是 `/bin/zsh`，无需回滚。卸载后 fpath 中 homebrew 条目为 0，
+zwc 头部版本为 `5.9`，fzf-tab 的 Tab 补全（mock fzf 捕获到 1 次调用、0 报错）正常。
+
+验证：`bash -n setup.sh`；用 stub `brew`/`sudo` 跑真实函数分支——macOS 两分支只打提示、
+Linux 两分支分别执行/跳过 chsh；formula 安装列表为
+`tmux vim git wget fzf eza fd bat ripgrep btop fontconfig cmake ninja clang-format ccache pkg-config`（无 zsh）。
+
+## 2026-10-28 · macOS 上双飞书实例（local-omp + local-codex）
+
+用户反馈 Ubuntu 上两个智能体能同时用，macOS 上不行。实查结论：app 一直在，坏的是配置与包装脚本。
+
+- 真实映射：`cli_aa5f5b5787f9dc01` = **local-omp**；`cli_aa59f1470ab8dc18` = **local-codex**。
+  事件总线按 appId 隔离（`~/.lark-cli/events/<appId>/`），本就互不冲突。
+- `~/.omp/lark-bot/config.env` 是 Linux 遗留：`WORKDIR=/home/horizon/workspace`、
+  `AGENT_BIN=/home/horizon/.local/bin/omp`、`OWNER_ID=ou_xxx…` 占位、`LARK_PROFILE=omp-bot`（不存在）。
+  lark-cli 的 profile 原名就是 appId，已 `profile rename cli_aa5f5b5787f9dc01 omp-bot` 对齐。
+- **包装脚本 bug（关键）**：`bin/lark-bot` 的 `BOT_HOME`/`SERVICE_NAME` 默认值写死，
+  `omp-lark-bot status/stop/restart` 全落到 local-codex 的 home 与 launchd 标签上，
+  `stop` 会把另一个实例停掉。改为按 `$0` 名字推断（`omp-lark-bot` → `~/.omp/lark-bot` +
+  `com.home-clean.omp-lark-bot`）。
+- launchd 模板新增 `__BIN__` / `__SERVICE__` 占位符，`install_launchagent` 增加第 3 个参数；
+  plist 现在显式写入 `LARK_BOT_SERVICE`，否则 stop 仍会退化。
+- 修掉 `install_launchagent` 里两处 `$var（` 被 bash 吞字符的老问题（全角括号前必须 `${var}`）。
+
+验证：`omp-lark-bot check` 全绿（workdir/owner/profile 正确，`event_bus: available`）；
+直接跑 bridge 的 `_build_args` + 输出解析，omp 返回 `rc=0`、捕获 thread、解析出答复「好」；
+两个 LaunchAgent 同时 running（74490 / 74552），各自 consuming 自己的 app；
+重启其一不影响另一个；`omp-lark-bot status` 在干净环境下返回正确的 pid；
+34 项单测通过；`bash -n` 与 `plutil -lint` 通过。

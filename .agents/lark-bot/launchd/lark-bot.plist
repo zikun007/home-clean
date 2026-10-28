@@ -7,6 +7,7 @@
     __LABEL__     launchd 标签，例如 com.home-clean.lark-bot
     __HOME__      用户主目录（launchd 不展开 ~）
     __BOT_HOME__  运行时目录，例如 ~/.agents/lark-bot
+    __BIN__       可执行名：lark-bot 或 omp-lark-bot（同一份源码两个实例）
 -->
 <plist version="1.0">
 <dict>
@@ -15,7 +16,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.local/bin/lark-bot</string>
+        <string>__HOME__/.local/bin/__BIN__</string>
         <string>run</string>
         <string>--no-console</string>
     </array>
@@ -27,6 +28,8 @@
         <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>LARK_BOT_HOME</key>
         <string>__BOT_HOME__</string>
+        <key>LARK_BOT_SERVICE</key>
+        <string>__SERVICE__</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>

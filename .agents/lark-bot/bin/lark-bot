@@ -13,8 +13,15 @@ while [ -L "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 BOT_SRC="$(cd "$SCRIPT_DIR/.." && pwd)"
-BOT_HOME="${LARK_BOT_HOME:-$HOME/.agents/lark-bot}"
-SERVICE_NAME="${LARK_BOT_SERVICE:-lark-bot}"
+# 同一份源码跑两个实例：按被调用的名字推断默认值，避免 omp-lark-bot
+# 误用 lark-bot 的 home / launchd 标签（会去停掉另一个实例）
+INVOKED="$(basename -- "${0:-lark-bot}")"
+case "$INVOKED" in
+    omp-lark-bot) DEFAULT_BOT_HOME="$HOME/.omp/lark-bot"; DEFAULT_SERVICE="omp-lark-bot" ;;
+    *)            DEFAULT_BOT_HOME="$HOME/.agents/lark-bot"; DEFAULT_SERVICE="lark-bot" ;;
+esac
+BOT_HOME="${LARK_BOT_HOME:-$DEFAULT_BOT_HOME}"
+SERVICE_NAME="${LARK_BOT_SERVICE:-$DEFAULT_SERVICE}"
 # macOS 上的 launchd 标签；setup.sh 安装时写入，手动起同名标签也可
 LAUNCHD_LABEL="${LARK_BOT_LAUNCHD_LABEL:-com.home-clean.$SERVICE_NAME}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"

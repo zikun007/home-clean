@@ -105,11 +105,19 @@ ln -sfn "$PWD/.agents/lark-bot/bin/lark-bot" ~/.local/bin/omp-lark-bot
 install -m 644 .agents/lark-bot/systemd/omp-lark-bot.service \
     ~/.config/systemd/user/omp-lark-bot.service
 systemctl --user daemon-reload
-LARK_BOT_HOME=~/.omp/lark-bot LARK_BOT_SERVICE=omp-lark-bot omp-lark-bot check
+omp-lark-bot check          # 自动指向 ~/.omp/lark-bot，无需再写 LARK_BOT_HOME
 systemctl --user enable --now omp-lark-bot
 ```
 
-两个实例使用不同的 `LARK_BOT_HOME`、PID、数据库和 systemd 服务，互不影响。
+`bin/lark-bot` 按**被调用的名字**推断实例默认值：叫 `omp-lark-bot` 就用 `~/.omp/lark-bot`
+和 `omp-lark-bot` 服务名，其余情况用 `~/.agents/lark-bot` 和 `lark-bot`。这样才能在同一台
+机器上同时跑 local-codex 和 local-omp 而不互相 `stop`。`LARK_BOT_HOME` / `LARK_BOT_SERVICE` /
+`LARK_BOT_LAUNCHD_LABEL` 仍可显式覆盖。macOS 上 `setup.sh` 会把这些写进 LaunchAgent 的
+`EnvironmentVariables`。
+
+两个实例使用不同的 `LARK_BOT_HOME`、PID、数据库、launchd 标签（`com.home-clean.lark-bot` /
+`com.home-clean.omp-lark-bot`），互不影响。前提是各自绑定**不同的飞书 app**——事件总线按
+appId 隔离（`~/.lark-cli/events/<appId>/`），同一个 app 才会冲突。
 
 ## 配置要点
 
@@ -145,13 +153,17 @@ systemctl --user enable --now lark-bot
 systemctl --user status lark-bot
 ```
 
-**macOS（launchd）** — LaunchAgent 装到 `~/Library/LaunchAgents/com.home-clean.lark-bot.plist`，
-登录即启动，崩溃后 10 秒内自动重启：
+**macOS（launchd）** — 每个实例一个 LaunchAgent，标签随可执行名走：
+`com.home-clean.lark-bot`（local-codex）和 `com.home-clean.omp-lark-bot`（local-omp），
+分别装到 `~/Library/LaunchAgents/<label>.plist`，登录即启动、崩溃后 10 秒内自动重启：
 
 ```bash
-launchctl print gui/$UID/com.home-clean.lark-bot     # 查看运行状态
-launchctl kickstart -k gui/$UID/com.home-clean.lark-bot   # 重启
+launchctl print gui/$UID/com.home-clean.omp-lark-bot        # 查看运行状态
+launchctl kickstart -k gui/$UID/com.home-clean.omp-lark-bot # 重启
 ```
+
+plist 里显式写入 `LARK_BOT_HOME`、`LARK_BOT_SERVICE` 和 `ProgramArguments` 指向的可执行名，
+缺了 `LARK_BOT_SERVICE` 时 `stop` 会退化成 `lark-bot` 而误停另一个实例。
 
 LaunchAgent 的 PATH 里显式包含 `/opt/homebrew/bin` 和 `/usr/local/bin`：`lark-cli` 是
 `#!/usr/bin/env node`，launchd 的默认 PATH 找不到 node 就会一直报

@@ -14,7 +14,7 @@
 ## 🌟 Key Features
 
 - **Cross-Platform Auto-Detection:** `setup.sh` detects the OS automatically — `apt` on Ubuntu, `Homebrew` on macOS; `.zshrc` switches platform-specific configs (Homebrew, CUDA, ROS2, etc.) via `IS_MACOS` / `IS_LINUX` flags. One config, every machine.
-- **One-Click Setup:** Automatically installs dependencies (Zsh, Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop, etc.), registers Nerd Font & SimSun (`~/.local/share/fonts` + `fc-cache` on Linux, `~/Library/Fonts` on macOS), and safely establishes symlinks.
+- **One-Click Setup:** Automatically installs dependencies (Tmux, Vim, Zoxide, eza, fd, bat, ripgrep, btop, etc. — plus `zsh` on Linux; macOS uses its bundled `/bin/zsh`), registers Nerd Font & SimSun (`~/.local/share/fonts` + `fc-cache` on Linux, `~/Library/Fonts` on macOS), and safely establishes symlinks.
 - **Efficient Shell Experience:** Zsh + Oh My Zsh with syntax highlighting, auto-suggestions, fzf-tab and Vi Mode. Integrated with `zoxide` for smart, sub-second directory jumping.
 - **Modern CLI Toolchain:** Automatically replaces `ls` with `eza`, `find` with `fd`, `cat` with `bat`, `grep` with `rg`, and `top` with `btop`, with Ubuntu package names (`fdfind` / `batcat`) handled transparently.
 - **Terminal Multiplexing:** Carefully crafted Tmux configuration supporting mouse operations, quick pane splitting, and session persistence, significantly boosting remote debugging efficiency.
@@ -87,6 +87,12 @@ Commands: `/pwd`, `/cd <path>`, `/status`, `/new`, `/stop`, `/help` (slash form 
 
 > **Multi-host:** Feishu allows exactly one event-bus consumer per app globally. Stop the other host's `lark-bot` before starting this one; `lark-bot check` detects the conflict and reports `event_bus: occupied_by_another_host`.
 
+> **Two instances:** `lark-bot` (e.g. local-codex) and `omp-lark-bot` (local-omp) can run side by side
+> on one machine as long as each uses a **different Feishu app** (`LARK_PROFILE`). The event bus is
+> isolated per appId, so they never conflict; sharing one app is what triggers `occupied_by_another_host`.
+> `omp-lark-bot` infers `LARK_BOT_HOME=~/.omp/lark-bot` and the launchd label
+> `com.home-clean.omp-lark-bot` from its invoked name, so `status` / `stop` / `restart` stay per-instance.
+
 ## 🔧 Platform Differences
 
 `.zshrc` sets `IS_MACOS` / `IS_LINUX` from `uname` at the top; every platform difference keys off them, and `setup.sh` uses the same check.
@@ -102,7 +108,7 @@ Commands: `/pwd`, `/cd <path>`, `/status`, `/new`, `/stop`, `/help` (slash form 
 | CUDA / `LD_LIBRARY_PATH` | Injected when `/usr/local/cuda` exists | Skipped entirely |
 | ROS2 / colcon aliases | `cw` `cs` `cb` `cbs` `sb` | Not defined (no ROS2 on macOS) |
 | `ll` / `lt` | `eza -al --header` / `eza -l --sort=oldest --header` | Same |
-| Default shell switch | `sudo chsh` | `chsh`; a brew zsh must first be added to `/etc/shells` |
+| Default shell | Installs `zsh`, then `sudo chsh` | Bundled `/bin/zsh`; no brew zsh, no shell switch |
 | C++ compiler | `build-essential` (gcc/g++) | Xcode CLT `clang` / `clang++` |
 | C++ debugger | `gdb` | `lldb` (shipped with CLT; macOS has no gdb) |
 | C++ build | `cmake` + `ninja-build` | `cmake` + `ninja` |

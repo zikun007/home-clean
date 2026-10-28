@@ -136,21 +136,25 @@ decide_component() {
 }
 
 # 生成并加载 launchd LaunchAgent（macOS）
-# $1=标签 $2=运行时目录
+# $1=标签 $2=运行时目录 $3=可执行名(lark-bot|omp-lark-bot)
 install_launchagent() {
-    local label="$1" bot_home="$2"
+    local label="$1" bot_home="$2" bin="$3"
     local plist="$HOME/Library/LaunchAgents/$label.plist"
     mkdir -p "$HOME/Library/LaunchAgents" "$bot_home/logs"
+    # LARK_BOT_SERVICE 必须显式写入：stop/restart 靠它推 launchd 标签，
+    # 缺了就会退化成 lark-bot，误停掉另一个实例。
     sed -e "s|__LABEL__|$label|g" \
         -e "s|__HOME__|$HOME|g" \
         -e "s|__BOT_HOME__|$bot_home|g" \
+        -e "s|__BIN__|$bin|g" \
+        -e "s|__SERVICE__|${label#com.home-clean.}|g" \
         "$DOTFILES_DIR/.agents/lark-bot/launchd/lark-bot.plist" > "$plist"
     # 先卸载旧实例，再按新 plist 加载
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
     if launchctl bootstrap "gui/$UID" "$plist" 2>/dev/null; then
-        echo -e "${GREEN}  [OK] LaunchAgent 已加载: $label（登录自启 + 崩溃自动重启）${NC}"
+        echo -e "${GREEN}  [OK] LaunchAgent 已加载: ${label}（登录自启 + 崩溃自动重启）${NC}"
     else
-        echo -e "${YELLOW}  [提示] 已写入 $plist，重新登录后生效；或手动 launchctl bootstrap gui/$UID $plist${NC}"
+        echo -e "${YELLOW}  [提示] 已写入 ${plist}，重新登录后生效；或手动 launchctl bootstrap gui/$UID ${plist}${NC}"
     fi
 }
 
@@ -168,7 +172,7 @@ install_lark_bot() {
     echo -e "${GREEN}  [链接] ~/.local/bin/lark-bot${NC}"
 
     if [ -n "$IS_MACOS" ]; then
-        install_launchagent "com.home-clean.lark-bot" "$LARK_BOT_HOME"
+        install_launchagent "com.home-clean.lark-bot" "$LARK_BOT_HOME" "lark-bot"
     elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
         mkdir -p "$HOME/.config/systemd/user"
         install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/lark-bot.service" \
@@ -191,7 +195,7 @@ install_omp_bot() {
     ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/omp-lark-bot"
     echo -e "${GREEN}  [链接] ~/.local/bin/omp-lark-bot${NC}"
     if [ -n "$IS_MACOS" ]; then
-        install_launchagent "com.home-clean.omp-lark-bot" "$OMP_BOT_HOME"
+        install_launchagent "com.home-clean.omp-lark-bot" "$OMP_BOT_HOME" "omp-lark-bot"
     elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
         mkdir -p "$HOME/.config/systemd/user"
         install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/omp-lark-bot.service" \
@@ -261,7 +265,9 @@ install_deps_macos() {
     # C++ 工具链。macOS CLT 已提供 clang / clang++ / clangd / lldb / make，
     # 这里只补 CLT 没有的：cmake/ninja 构建、clang-format 格式化、ccache 加速。
     # 不要装 llvm：那是整套 1.8GB 的 clang，而 clang-format 独立包只有 3.8MB。
-    for formula in zsh tmux vim git wget fzf eza fd bat ripgrep btop fontconfig \
+    # 不装 zsh：macOS 自带 /bin/zsh，两套 zsh 会共用 zcompdump/p10k 的 .zwc
+    # 互相覆盖（zsh 5.9 vs 5.9.2 编译版本不同 → "zwc file has wrong version"）。
+    for formula in tmux vim git wget fzf eza fd bat ripgrep btop fontconfig \
         cmake ninja clang-format ccache pkg-config; do
         brew list --formula "$formula" &>/dev/null || missing+=("$formula")
     done
@@ -479,27 +485,30 @@ else
 fi
 
 # ==========================================
-# 7. 切换默认 Shell
+# 7. 默认 Shell
 # ==========================================
-ZSH_BIN="$(command -v zsh)"
-# 用 python3 解析真实路径：BSD readlink 的 -f 在旧 macOS 上不可靠
+# macOS 10.15+ 默认就是 /bin/zsh，且不再安装 brew zsh，无需 chsh。
+# Linux 默认是 bash，只有它需要切到 zsh。
 real_path() {
+    # 用 python3 解析真实路径：BSD readlink 的 -f 在旧 macOS 上不可靠
     python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || printf '%s' "$1"
 }
-if [ -n "$ZSH_BIN" ] && [ "$(real_path "$SHELL")" != "$(real_path "$ZSH_BIN")" ]; then
-    ZSH_REAL="$(real_path "$ZSH_BIN")"
-    echo -e "${YELLOW}>>> 将 Zsh 设置为默认 Shell...${NC}"
-    if [ -n "$IS_MACOS" ]; then
-        # macOS 只接受 /etc/shells 白名单内的 shell；brew 的 zsh 默认不在其中
-        if [[ "$ZSH_REAL" == /opt/homebrew/* ]] && ! grep -qx "$ZSH_REAL" /etc/shells; then
-            echo -e "${YELLOW}  需要先执行: echo $ZSH_REAL | sudo tee -a /etc/shells${NC}"
-        else
-            chsh -s "$ZSH_REAL"
-        fi
+if [ -n "$IS_MACOS" ]; then
+    if [ "$(real_path "$SHELL")" == "$(real_path /bin/zsh)" ]; then
+        echo -e "${GREEN}>>> 默认 Shell 已是系统自带 /bin/zsh${NC}"
     else
-        sudo chsh -s "$ZSH_REAL" "$USER"
+        # 变量名后紧跟全角字符时必须用 ${}，否则 bash 会把多字节字符吞进变量名
+        echo -e "${YELLOW}>>> 提示: 当前默认 Shell 为 ${SHELL}，macOS 自带 /bin/zsh 可直接使用${NC}"
     fi
-    echo -e "${GREEN}  设置完成，重新登录后生效。${NC}"
+else
+    ZSH_BIN="$(command -v zsh)"
+    if [ -n "$ZSH_BIN" ] && [ "$(real_path "$SHELL")" != "$(real_path "$ZSH_BIN")" ]; then
+        echo -e "${YELLOW}>>> 将 Zsh 设置为默认 Shell...${NC}"
+        sudo chsh -s "$(real_path "$ZSH_BIN")" "$USER"
+        echo -e "${GREEN}  设置完成，重新登录后生效。${NC}"
+    else
+        echo -e "${GREEN}>>> 默认 Shell 已是 zsh${NC}"
+    fi
 fi
 
 # ==========================================
