@@ -14,12 +14,10 @@ font-feature = +calt
 font-feature = +liga
 
 # --------------------------
-# 主题：Night Owl（深海军蓝）
-# 前景/背景对比度约 13.5:1（TokyoNight Storm 约 9:1）
-# 备选：TokyoNight Night（同为东京夜，只是更深）/ Rose Pine Moon（柔和蓝紫）
-#       Nightfox（低饱和蓝青）/ Kanagawa Wave（暖纸色前景）
+# 主题：Catppuccin Mocha（固定深色，不随系统切换）
+# 备选：Night Owl（深海军蓝，对比度更高）/ TokyoNight Night / Rose Pine Moon
 # --------------------------
-theme = Night Owl
+theme = Catppuccin Mocha
 window-theme = dark
 
 # --------------------------
@@ -29,6 +27,8 @@ window-padding-x = 10
 window-padding-y = 8
 window-padding-balance = true
 window-save-state = always
+# 背景轻微透明（1 为不透明）；改这一项后需完全退出 Ghostty 再打开才生效
+background-opacity = 0.93
 # 原生 macOS 标签栏，标题栏透明、融入终端背景（比自定义 tabs 样式更精致）
 macos-titlebar-style = transparent
 # 隐藏标题栏左侧的代理图标，标签栏更干净
