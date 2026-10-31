@@ -74,8 +74,22 @@ path=(
   "$HOME/bin"
   "$HOME/.cargo/bin"
   ${IS_MACOS:+/opt/homebrew/bin}
+  ${IS_MACOS:+/opt/homebrew/sbin}
   $path
 )
+
+# 可选工具：目录存在才加入，追加在系统路径之后，不抢占同名命令
+for _p in \
+  "$HOME/.pixi/bin" \
+  "$HOME/.lmstudio/bin" \
+  "/Applications/Visual Studio Code.app/Contents/Resources/app/bin" \
+  /Library/TeX/texbin; do
+  [[ -d "$_p" ]] && path+=("$_p")
+done
+unset _p
+
+# OrbStack：PATH（docker/orb）+ 补全，须在 compinit（oh-my-zsh）之前
+[[ -f "$HOME/.orbstack/shell/init.zsh" ]] && source "$HOME/.orbstack/shell/init.zsh"
 
 # uv / pip、Conda 路径兜底
 [[ -d "$HOME/.local/share/uv/tools" ]] && path=("$HOME/.local/share/uv/tools" $path)

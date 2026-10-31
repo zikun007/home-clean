@@ -138,3 +138,52 @@ Linux 两分支分别执行/跳过 chsh；formula 安装列表为
 两个 LaunchAgent 同时 running（74490 / 74552），各自 consuming 自己的 app；
 重启其一不影响另一个；`omp-lark-bot status` 在干净环境下返回正确的 pid；
 34 项单测通过；`bash -n` 与 `plutil -lint` 通过。
+
+## 2026-10-31 · 本机 zsh 切换到仓库配置
+
+- `setup.sh` 已在本机执行，旧配置备份在 `~/.dotfiles_backup/20261031_191513/`。
+- 回归：新 `.zshrc` 丢了旧配置里的 `/opt/homebrew/sbin`、`~/.pixi/bin`、`~/.lmstudio/bin`、
+  VS Code `code`、OrbStack `init.zsh`。已补回：目录存在才追加到 PATH 末尾，OrbStack init 在
+  oh-my-zsh（compinit）之前 source；同时预留 `/Library/TeX/texbin`（tmux 等非登录 shell 用）。
+- 验证方法：`env -i` + python `pty.fork` 起交互 shell。直接 `zsh -i -c` 无 TTY 会报
+  `can't change option: zle` 和 gitstatus 初始化失败，属于测试假象。
+- 未迁移的旧 `.zshrc` 内容：`proxy_on` 旧地址 127.0.0.1:7890、uv/pixi 补全、`CPATH`/`LIBRARY_PATH`、
+  `zoxide --cmd cd`、`cat→bat`/`find→fd` 别名，待用户决定。
+
+### LaTeX：OrbStack 容器 → 本机 MacTeX
+
+- 删除 OrbStack 容器 `utex2`、镜像 `latex:u22`、卷 `Latex`；项目复制到 `~/Workspace/Latex`，
+  按文档类分为 `PPT/`（beamer）、`Book/`（book）、`Article/`（article / ctexart / gmcmthesis）。
+- **`brew install --cask mactex-no-gui` 在 macOS 14 上不可用**：Homebrew 已不为 macOS 14 构建 bottle，
+  cask 依赖的 Homebrew ghostscript 会拉 38 个依赖全部源码编译（卡在 raw.githubusercontent.com）。
+  改为 `sudo installer -pkg … -applyChoiceChangesXML`：装 `org.tug.mactex.texlive2026` +
+  pkg 自带 `ghostscript10.07.0`，关 `gui2026`。同理 setup.sh 中 `fontconfig` 也没装上（无 `fc-list`）。
+- XeTeX 在 macOS 走 CoreText，只认系统登记的字体（TeX Live 自带的 Fandol 也找不到）。
+  已复制到 `~/Library/Fonts`：Fandol 6 款（来自 TeX Live）、`KaiTi.ttf`/`FangSong.ttf`（来自 kdocker）。
+  注意 `SimKai.ttf` 的家族名是 `KaiTi_GB2312`，不是 `KaiTi`。
+- tcolorbox 6.9 不再接受 `xcolor={dvipsnames}`：LatexBeamer 改为 `\documentclass[8pt,xcolor={dvipsnames}]{beamer}`。
+- 5 个项目 `latexmk -xelatex` 均通过（22 / 34 / 16 / 32 / 79 页）。
+
+### `/etc` 恢复出厂
+
+- `/etc/zprofile` 曾被改成"设环境变量 + `source $ZDOTDIR/.zshrc`"，且删掉了 `path_helper`：
+  导致登录 shell 里 `.zshrc` 执行两次、`/usr/local/bin`（MacTeX 的 `gs`）和 `/etc/paths.d` 不生效。
+  `/etc/zshrc` 注释掉了 HISTFILE 三行。两者已从 `/System/Library/Templates/Data/private/etc/` 恢复，
+  原文件备份在 `~/.dotfiles_backup/20261031_191513/etc/`。bash/csh 相关文件均为出厂版本，保留
+  （root 的 `/bin/sh` 实为 bash，依赖 `/etc/profile`）。
+- `zprofile` 中有用的变量迁入仓库 `.zshenv`：`XDG_STATE_HOME`、`PIP_CONFIG_FILE`、`IPYTHONDIR`、`CONAN_HOME`。
+- Homebrew 镜像：实测 TUNA/USTC/阿里/腾讯 API 均 5~6MB/s（带宽上限），官方源不通；
+  PyPI 包下载 TUNA 5.1、USTC 4.4、腾讯 1.8、阿里 1.3 MB/s。用户选定 TUNA（与 setup.sh、uv.toml 一致）。
+- 登录 shell 启动约 0.13s。
+
+### `~` 隐藏目录整理
+
+- 删除：`~/.local/bin/omp.old`、`~/.config/fonts`（与 `~/Library/Fonts` 逐字节相同）、`~/.config/iterm2`、
+  fish 全部数据、`~/.xmake`、空的 `~/.SuiteSparse`、`~/package*.json`；`brew uninstall fish xmake`。
+- `.zshenv` 新增重定向并按"配置 / 缓存 / 状态"分组：`npm_config_cache`、`MPLCONFIGDIR`、
+  `TLDR_CACHE_DIR`、`GRAPHBLAS_CACHE_PATH`、`ROS_HOME`；对应目录已移入 `~/.cache`、`~/.config`、`~/.local/state`。
+- tldr（C 客户端 1.6.1）：`TLDR_CACHE_DIR` 是父目录，客户端自己拼 `/.tldrc`，所以缓存在 `~/.cache/.tldrc`。
+  缓存是整个 tldr 仓库的 main.zip（149M，40 种语言），从 GitHub 下载；缓存不存在时会强制下载，国内会卡住。
+- 不挪：`.cargo`/`.rustup`（用户要求）、`.docker`（OrbStack 管理）、`.codex`（launchd 启动的 lark-bot 不读 .zshenv）、
+  `.lmstudio`（需在 App 内改）、其余为路径写死的工具目录。
+- `~/.viminfo` 来自 `sudo vim` 编辑 `/etc`：sudo 清掉 `VIMINIT` 但保留 `HOME`。改系统文件请用 `sudo -e`。
