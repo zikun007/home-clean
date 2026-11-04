@@ -52,7 +52,7 @@ home-clean/
 
 ## 🚀 Quick Start
 
-Note: setup.sh will prompt for privileges to install system packages (`sudo` on Ubuntu, Homebrew on macOS). Optional components (lark-bot / omp-lark-bot) are asked interactively; non-interactive runs (CI) install nothing by default. See `--help`. The script features a built-in safety mechanism that automatically backs up your existing configurations to ~/.dotfiles_backup to prevent any destructive overwrites.
+Note: setup.sh will prompt for privileges to install system packages (`sudo` on Ubuntu, Homebrew on macOS). Optional components (codex-lark-bot / omp-lark-bot / claude-lark-bot) are asked interactively; non-interactive runs (CI) install nothing by default. See `--help`. The script features a built-in safety mechanism that automatically backs up your existing configurations to ~/.dotfiles_backup to prevent any destructive overwrites.
 
 ```bash
 # 1. Clone the repository
@@ -65,33 +65,37 @@ cd home-clean
 
 After deployment, log out and back in (or run `source ~/.zshenv`) to enjoy your new environment.
 
-## 🤖 Feishu Lark Bot (lark-bot)
+## 🤖 Feishu Lark Bot (codex-lark-bot / omp-lark-bot / claude-lark-bot)
 
-`.agents/lark-bot/` is an always-on Feishu ↔ agent bridge: it consumes Lark messages, runs `codex exec` or `omp --mode json`, and streams progress plus the final answer back. **Installing it is optional**: `setup.sh` asks per component (default Y when already installed, N when not), or you can pass flags; `omp-lark-bot` (local-omp) is only offered when `~/.omp` exists.
+`.agents/lark-bot/` is an always-on Feishu ↔ agent bridge: it consumes Lark messages, runs `codex exec`, `omp --mode json` or `claude -p`, and streams progress plus the final answer back. **Installing it is optional**: `setup.sh` asks per component (default Y when already installed, N when not), or you can pass flags; `omp-lark-bot` is only offered when `~/.omp` exists, and `claude-lark-bot` when `claude` is installed.
 
 ```bash
-./setup.sh                         # asks whether to install lark-bot (skippable)
-./setup.sh --with-lark-bot         # no prompt: install/update the Codex variant
-./setup.sh --without-lark-bot      # skip explicitly (existing install is kept)
-vim ~/.agents/lark-bot/config.env  # set OWNER_ID
-lark-bot check
-lark-bot start
-lark-bot status
+./setup.sh                         # asks whether to install each instance (skippable)
+./setup.sh --with-codex-bot         # no prompt: install/update codex-lark-bot
+./setup.sh --without-codex-bot      # skip explicitly (existing install is kept)
+vim ~/.codex/lark-bot/config.env  # set OWNER_ID
+codex-lark-bot check
+codex-lark-bot start
+codex-lark-bot status
 ```
+
+Each instance is bound by executable name: `codex-lark-bot` → `~/.codex/lark-bot` + `codex`,
+`omp-lark-bot` → `~/.omp/lark-bot` + `omp`, `claude-lark-bot` → `~/.claude/lark-bot` + `claude`.
 
 Commands: `/pwd`, `/cd <path>`, `/status`, `/new`, `/stop`, `/help` (slash form only). Owner-only P2P by default; `workspace-write` sandbox; progress is batched and replies use Lark Markdown. See `.agents/lark-bot/README.md`.
 
 `setup.sh` is re-runnable: optional components are asked again each run, existing `config.env`, logs, DB and session data are never overwritten, and skipping never uninstalls anything.
 
-**Autostart:** Linux installs a systemd unit (`~/.config/systemd/user/lark-bot.service`, enabled manually); macOS installs and immediately loads a launchd LaunchAgent (`~/Library/LaunchAgents/com.home-clean.lark-bot.plist`) that starts at login and respawns within 10 s of a crash. `lark-bot stop` unloads the supervisor too, and `restart` goes through it.
+**Autostart:** Linux installs a systemd unit (`~/.config/systemd/user/codex-lark-bot.service`, enabled manually); macOS installs and immediately loads a launchd LaunchAgent (`~/Library/LaunchAgents/com.home-clean.codex-lark-bot.plist`) that starts at login and respawns within 10 s of a crash. `codex-lark-bot stop` unloads the supervisor too, and `restart` goes through it.
 
-> **Multi-host:** Feishu allows exactly one event-bus consumer per app globally. Stop the other host's `lark-bot` before starting this one; `lark-bot check` detects the conflict and reports `event_bus: occupied_by_another_host`.
+> **Multi-host:** Feishu allows exactly one event-bus consumer per app globally. Stop the other host's instance before starting this one; `codex-lark-bot check` detects the conflict and reports `event_bus: occupied_by_another_host`.
 
-> **Two instances:** `lark-bot` (e.g. local-codex) and `omp-lark-bot` (local-omp) can run side by side
-> on one machine as long as each uses a **different Feishu app** (`LARK_PROFILE`). The event bus is
-> isolated per appId, so they never conflict; sharing one app is what triggers `occupied_by_another_host`.
-> `omp-lark-bot` infers `LARK_BOT_HOME=~/.omp/lark-bot` and the launchd label
-> `com.home-clean.omp-lark-bot` from its invoked name, so `status` / `stop` / `restart` stay per-instance.
+> **Three instances:** `codex-lark-bot` (codex), `omp-lark-bot` (omp) and
+> `claude-lark-bot` (claude) can run side by side on one machine as long as each uses a
+> **different Feishu app** (`LARK_PROFILE`). The event bus is isolated per appId, so they never
+> conflict; sharing one app is what triggers `occupied_by_another_host`.
+> Each instance infers its own `LARK_BOT_HOME` and launchd label from its invoked name, so
+> `status` / `stop` / `restart` stay per-instance.
 
 ## 🔧 Platform Differences
 

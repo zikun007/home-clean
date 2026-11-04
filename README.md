@@ -57,7 +57,7 @@ home-clean/
 
 > **警告:** 执行前建议备份原有的 `.zshrc` 或 `.tmux.conf`。
 
-注意: setup.sh 会自动请求权限以安装系统依赖（Ubuntu 需 sudo，macOS 使用 Homebrew）。可选组件（lark-bot / omp-lark-bot）默认交互询问，非交互模式（如 CI）默认不安装，可用 `--help` 查看参数。脚本内置安全机制，会自动将你原有的配置备份到 ~/.dotfiles_backup 目录下，不会产生破坏性覆盖。
+注意: setup.sh 会自动请求权限以安装系统依赖（Ubuntu 需 sudo，macOS 使用 Homebrew）。可选组件（codex-lark-bot / omp-lark-bot / claude-lark-bot）默认交互询问，非交互模式（如 CI）默认不安装，可用 `--help` 查看参数。脚本内置安全机制，会自动将你原有的配置备份到 ~/.dotfiles_backup 目录下，不会产生破坏性覆盖。
 
 ```bash
 # 1. 克隆仓库
@@ -70,35 +70,38 @@ cd home-clean
 
 部署完成后，重新登录终端（或执行 `source ~/.zshenv`）即可享受全新的开发环境。
 
-## 🤖 飞书机器人 (lark-bot)
+## 🤖 飞书机器人 (codex-lark-bot / omp-lark-bot / claude-lark-bot)
 
-`.agents/lark-bot/` 提供飞书 ↔ 助手的常驻桥接：监听飞书消息，调用 `codex exec` 或 `omp --mode json`，把进度和结果发回。**安装是可选项**：`setup.sh` 会逐项询问（已安装默认 Y，未安装默认 N），也可用参数直接指定；检测到 `~/.omp` 时才会询问 `omp-lark-bot`（local-omp）。
+`.agents/lark-bot/` 提供飞书 ↔ 助手的常驻桥接：监听飞书消息，调用 `codex exec`、`omp --mode json` 或 `claude -p`，把进度和结果发回。**安装是可选项**：`setup.sh` 会逐项询问（已安装默认 Y，未安装默认 N），也可用参数直接指定；检测到 `~/.omp` 时才会询问 `omp-lark-bot`，检测到 `claude` 时才会询问 `claude-lark-bot`。
 
 ```bash
-./setup.sh                         # 交互询问是否安装 lark-bot（可跳过）
-./setup.sh --with-lark-bot         # 跳过询问，直接安装/更新 Codex 版
-./setup.sh --without-lark-bot      # 明确跳过（不卸载已有安装）
-vim ~/.agents/lark-bot/config.env  # 至少填写 OWNER_ID
-lark-bot check
-lark-bot start
-lark-bot status
+./setup.sh                         # 交互询问是否安装各实例（可跳过）
+./setup.sh --with-codex-bot         # 跳过询问，直接安装/更新 codex-lark-bot
+./setup.sh --without-codex-bot      # 明确跳过（不卸载已有安装）
+vim ~/.codex/lark-bot/config.env  # 至少填写 OWNER_ID
+codex-lark-bot check
+codex-lark-bot start
+codex-lark-bot status
 ```
+
+三个实例按可执行名绑定：`codex-lark-bot` → `~/.codex/lark-bot` + `codex`，
+`omp-lark-bot` → `~/.omp/lark-bot` + `omp`，`claude-lark-bot` → `~/.claude/lark-bot` + `claude`。
 
 支持 `/pwd`、`/cd <path>`、`/status`、`/new`、`/stop`、`/help`；命令只识别 `/xxx`。默认只响应主人私聊，使用 `workspace-write` 沙箱；进度消息按批合并，回复使用飞书 Markdown。详见 `.agents/lark-bot/README.md`。
 
 `setup.sh` 可反复执行：每次都重新询问可选组件，已有的 `config.env`、日志、数据库、会话数据不会被覆盖；跳过只是本次不安装，不会卸载。
 
-**开机自启**：Linux 写 systemd unit（`~/.config/systemd/user/lark-bot.service`，需手动 `enable`）；
-macOS 写 launchd LaunchAgent（`~/Library/LaunchAgents/com.home-clean.lark-bot.plist`）并立即加载，
-登录自启、崩溃 10 秒内自动重启。`lark-bot stop` 会连同托管一起卸载，`restart` 走托管原生重启。
+**开机自启**：Linux 写 systemd unit（`~/.config/systemd/user/codex-lark-bot.service`，需手动 `enable`）；
+macOS 写 launchd LaunchAgent（`~/Library/LaunchAgents/com.home-clean.codex-lark-bot.plist`）并立即加载，
+登录自启、崩溃 10 秒内自动重启。`codex-lark-bot stop` 会连同托管一起卸载，`restart` 走托管原生重启。
 
-> **多机注意：** 飞书的事件总线对同一个 app 全局只允许一个消费者，本机 `lark-bot start` 前先确认另一台机器的 `lark-bot` 已停。`lark-bot check` 会检测并在冲突时报 `event_bus: occupied_by_another_host`。
+> **多机注意：** 飞书的事件总线对同一个 app 全局只允许一个消费者，本机 `codex-lark-bot start` 前先确认另一台机器的同名实例已停。`codex-lark-bot check` 会检测并在冲突时报 `event_bus: occupied_by_another_host`。
 
-> **双实例：** 同一台机器可同时跑 `lark-bot`（如 local-codex）和 `omp-lark-bot`（local-omp），
-> 前提是两者使用**不同的飞书 app**（各自的 `LARK_PROFILE`）。事件总线按 appId 隔离，
-> 所以互不冲突；共用同一个 app 才会报 `occupied_by_another_host`。
-> `omp-lark-bot` 按调用名自动推断 `LARK_BOT_HOME=~/.omp/lark-bot` 和 launchd 标签
-> `com.home-clean.omp-lark-bot`，两个实例的 `status` / `stop` / `restart` 互不影响。
+> **三实例：** 同一台机器可同时跑 `codex-lark-bot`（codex）、`omp-lark-bot`（omp）和
+> `claude-lark-bot`（claude），前提是三者使用**不同的飞书 app**（各自的 `LARK_PROFILE`）。
+> 事件总线按 appId 隔离，所以互不冲突；共用同一个 app 才会报 `occupied_by_another_host`。
+> 每个实例按调用名自动推断自己的 `LARK_BOT_HOME` 和 launchd 标签，
+> `status` / `stop` / `restart` 互不影响。
 
 ## 🔧 平台差异说明
 

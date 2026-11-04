@@ -31,8 +31,9 @@ esac
 # ==========================================
 # 命令行参数：可选组件由用户决定
 # ==========================================
-WITH_LARK_BOT="auto"   # auto | yes | no
+WITH_CODEX_BOT="auto"  # auto | yes | no
 WITH_OMP_BOT="auto"    # auto | yes | no
+WITH_CLAUDE_BOT="auto" # auto | yes | no
 INTERACTIVE="auto"     # auto | yes | no
 SUMMARY=""
 
@@ -41,10 +42,12 @@ usage() {
 用法: ./setup.sh [选项]
 
 可选组件（可重复执行，随时改选；跳过不会卸载已有安装）：
-  --with-lark-bot      安装/更新 Codex 版 lark-bot
-  --without-lark-bot   跳过 lark-bot
+  --with-codex-bot     安装/更新 codex-lark-bot
+  --without-codex-bot  跳过 codex-lark-bot
   --with-omp-bot       安装/更新 omp-lark-bot（需已有 ~/.omp）
   --without-omp-bot    跳过 omp-lark-bot
+  --with-claude-bot    安装/更新 claude-lark-bot（需已安装 claude）
+  --without-claude-bot 跳过 claude-lark-bot
 
 运行模式：
   --interactive        强制进入交互选择
@@ -61,10 +64,12 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --with-lark-bot)    WITH_LARK_BOT="yes" ;;
-        --without-lark-bot) WITH_LARK_BOT="no" ;;
+        --with-codex-bot)   WITH_CODEX_BOT="yes" ;;
+        --without-codex-bot) WITH_CODEX_BOT="no" ;;
         --with-omp-bot)     WITH_OMP_BOT="yes" ;;
         --without-omp-bot)  WITH_OMP_BOT="no" ;;
+        --with-claude-bot)    WITH_CLAUDE_BOT="yes" ;;
+        --without-claude-bot) WITH_CLAUDE_BOT="no" ;;
         --interactive)      INTERACTIVE="yes" ;;
         --non-interactive|--yes|-y) INTERACTIVE="no" ;;
         -h|--help)          usage; exit 0 ;;
@@ -105,17 +110,23 @@ ask_yes_no() {
     done
 }
 
-LARK_BOT_HOME="$HOME/.agents/lark-bot"
+CODEX_BOT_HOME="$HOME/.codex/lark-bot"
 OMP_BOT_HOME="$HOME/.omp/lark-bot"
+CLAUDE_BOT_HOME="$HOME/.claude/lark-bot"
 
-lark_bot_installed() {
-    [ -f "$LARK_BOT_HOME/config.env" ] || [ -L "$HOME/.local/bin/lark-bot" ] \
-        || [ -f "$HOME/.config/systemd/user/lark-bot.service" ]
+codex_bot_installed() {
+    [ -f "$CODEX_BOT_HOME/config.env" ] || [ -L "$HOME/.local/bin/codex-lark-bot" ] \
+        || [ -f "$HOME/.config/systemd/user/codex-lark-bot.service" ]
 }
 
 omp_bot_installed() {
     [ -f "$OMP_BOT_HOME/config.env" ] || [ -L "$HOME/.local/bin/omp-lark-bot" ] \
         || [ -f "$HOME/.config/systemd/user/omp-lark-bot.service" ]
+}
+
+claude_bot_installed() {
+    [ -f "$CLAUDE_BOT_HOME/config.env" ] || [ -L "$HOME/.local/bin/claude-lark-bot" ] \
+        || [ -f "$HOME/.config/systemd/user/claude-lark-bot.service" ]
 }
 
 # 决定是否处理某个可选组件：结果写入 DECIDED (yes/no)
@@ -136,13 +147,13 @@ decide_component() {
 }
 
 # 生成并加载 launchd LaunchAgent（macOS）
-# $1=标签 $2=运行时目录 $3=可执行名(lark-bot|omp-lark-bot)
+# $1=标签 $2=运行时目录 $3=可执行名(codex-lark-bot|omp-lark-bot|claude-lark-bot)
 install_launchagent() {
     local label="$1" bot_home="$2" bin="$3"
     local plist="$HOME/Library/LaunchAgents/$label.plist"
     mkdir -p "$HOME/Library/LaunchAgents" "$bot_home/logs"
     # LARK_BOT_SERVICE 必须显式写入：stop/restart 靠它推 launchd 标签，
-    # 缺了就会退化成 lark-bot，误停掉另一个实例。
+    # 缺了就会退化成 codex-lark-bot，误停掉另一个实例。
     sed -e "s|__LABEL__|$label|g" \
         -e "s|__HOME__|$HOME|g" \
         -e "s|__BOT_HOME__|$bot_home|g" \
@@ -158,27 +169,27 @@ install_launchagent() {
     fi
 }
 
-install_lark_bot() {
-    echo -e "\n${BLUE}>>> 4. 部署 .agents/lark-bot 运行时...${NC}"
-    mkdir -p "$LARK_BOT_HOME/logs" "$LARK_BOT_HOME/memory"
-    if [ ! -f "$LARK_BOT_HOME/config.env" ]; then
-        install -m 600 "$DOTFILES_DIR/.agents/lark-bot/config.example.env" "$LARK_BOT_HOME/config.env"
-        echo -e "${YELLOW}  [提示] 已生成 $LARK_BOT_HOME/config.env，请填写 OWNER_ID 后启动${NC}"
+install_codex_bot() {
+    echo -e "\n${BLUE}>>> 4. 部署 codex-lark-bot 运行时...${NC}"
+    mkdir -p "$CODEX_BOT_HOME/logs" "$CODEX_BOT_HOME/memory"
+    if [ ! -f "$CODEX_BOT_HOME/config.env" ]; then
+        install -m 600 "$DOTFILES_DIR/.agents/lark-bot/config.codex.example.env" "$CODEX_BOT_HOME/config.env"
+        echo -e "${YELLOW}  [提示] 已生成 $CODEX_BOT_HOME/config.env，请填写 OWNER_ID 后启动${NC}"
     else
-        echo -e "${GREEN}  [保留] $LARK_BOT_HOME/config.env${NC}"
+        echo -e "${GREEN}  [保留] $CODEX_BOT_HOME/config.env${NC}"
     fi
     mkdir -p "$HOME/.local/bin"
-    ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/lark-bot"
-    echo -e "${GREEN}  [链接] ~/.local/bin/lark-bot${NC}"
+    ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/codex-lark-bot"
+    echo -e "${GREEN}  [链接] ~/.local/bin/codex-lark-bot${NC}"
 
     if [ -n "$IS_MACOS" ]; then
-        install_launchagent "com.home-clean.lark-bot" "$LARK_BOT_HOME" "lark-bot"
+        install_launchagent "com.home-clean.codex-lark-bot" "$CODEX_BOT_HOME" "codex-lark-bot"
     elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
         mkdir -p "$HOME/.config/systemd/user"
-        install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/lark-bot.service" \
-            "$HOME/.config/systemd/user/lark-bot.service"
+        install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/codex-lark-bot.service" \
+            "$HOME/.config/systemd/user/codex-lark-bot.service"
         systemctl --user daemon-reload 2>/dev/null || true
-        echo -e "${YELLOW}  [提示] 可执行 systemctl --user enable --now lark-bot 启动${NC}"
+        echo -e "${YELLOW}  [提示] 可执行 systemctl --user enable --now codex-lark-bot 启动${NC}"
     fi
 }
 
@@ -202,6 +213,45 @@ install_omp_bot() {
             "$HOME/.config/systemd/user/omp-lark-bot.service"
         systemctl --user daemon-reload 2>/dev/null || true
         echo -e "${YELLOW}  [提示] 可执行 systemctl --user enable --now omp-lark-bot 启动${NC}"
+    fi
+}
+
+install_claude_bot() {
+    echo -e "\n${BLUE}>>> 4c. 部署 claude-lark-bot 运行时...${NC}"
+    mkdir -p "$CLAUDE_BOT_HOME/logs" "$CLAUDE_BOT_HOME/memory"
+    if [ ! -f "$CLAUDE_BOT_HOME/config.env" ]; then
+        install -m 600 "$DOTFILES_DIR/.agents/lark-bot/config.claude.example.env" \
+            "$CLAUDE_BOT_HOME/config.env"
+        echo -e "${YELLOW}  [提示] 已生成 $CLAUDE_BOT_HOME/config.env，请填写 OWNER_ID / LARK_PROFILE${NC}"
+        echo -e "${YELLOW}  [提示] Claude 实例需要独立的飞书 app；事件总线不能与 Codex/omp 共用${NC}"
+    else
+        echo -e "${GREEN}  [保留] $CLAUDE_BOT_HOME/config.env${NC}"
+    fi
+    ln -sfn "$DOTFILES_DIR/.agents/lark-bot/bin/lark-bot" "$HOME/.local/bin/claude-lark-bot"
+    echo -e "${GREEN}  [链接] ~/.local/bin/claude-lark-bot${NC}"
+
+    # 新生成的配置还没有 OWNER_ID/app profile，直接加载 LaunchAgent 会进入
+    # crash loop（没有可用的飞书 app）。确认配置可用后再启用自启。
+    local claude_owner claude_profile ready=0
+    claude_owner=$(sed -n 's/^OWNER_ID=//p' "$CLAUDE_BOT_HOME/config.env" 2>/dev/null | tail -1)
+    claude_profile=$(sed -n 's/^LARK_PROFILE=//p' "$CLAUDE_BOT_HOME/config.env" 2>/dev/null | tail -1)
+    if [ -n "$claude_owner" ] && [ -n "$claude_profile" ] \
+        && lark-cli config show --profile "$claude_profile" >/dev/null 2>&1; then
+        ready=1
+    fi
+    if [ "$ready" != "1" ]; then
+        echo -e "${YELLOW}  [提示] 还缺 OWNER_ID 或独立的 LARK_PROFILE，暂不启用自启：${NC}"
+        echo -e "${YELLOW}    1) lark-cli config init --new   # 建独立 app/profile${NC}"
+        echo -e "${YELLOW}    2) 编辑 $CLAUDE_BOT_HOME/config.env 填 OWNER_ID / LARK_PROFILE${NC}"
+        echo -e "${YELLOW}    3) 重新运行 ./setup.sh --with-claude-bot 完成自启${NC}"
+    elif [ -n "$IS_MACOS" ]; then
+        install_launchagent "com.home-clean.claude-lark-bot" "$CLAUDE_BOT_HOME" "claude-lark-bot"
+    elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+        mkdir -p "$HOME/.config/systemd/user"
+        install -m 644 "$DOTFILES_DIR/.agents/lark-bot/systemd/claude-lark-bot.service" \
+            "$HOME/.config/systemd/user/claude-lark-bot.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        echo -e "${YELLOW}  [提示] 可执行 systemctl --user enable --now claude-lark-bot 启动${NC}"
     fi
 }
 
@@ -401,17 +451,17 @@ else
 fi
 
 # ==========================================
-# 4. 可选组件：lark-bot（Codex 版）
-# 仓库只保存源码；配置/状态/日志/记忆放在 ~/.agents/lark-bot
+# 4. 可选组件：codex-lark-bot（Codex 版）
+# 仓库只保存源码；配置/状态/日志/记忆放在 ~/.codex/lark-bot
 # ==========================================
-if lark_bot_installed; then lark_installed=1; else lark_installed=0; fi
-decide_component "$WITH_LARK_BOT" "$lark_installed" "Codex 版 lark-bot"
+if codex_bot_installed; then codex_installed=1; else codex_installed=0; fi
+decide_component "$WITH_CODEX_BOT" "$codex_installed" "codex-lark-bot"
 if [ "$DECIDED" = "yes" ]; then
-    install_lark_bot
-    SUMMARY="${SUMMARY}  lark-bot       : 已部署 (~/.agents/lark-bot)\n"
+    install_codex_bot
+    SUMMARY="${SUMMARY}  codex-lark-bot : 已部署 (~/.codex/lark-bot)\n"
 else
-    echo -e "\n${YELLOW}>>> 4. [跳过] 本次不安装 lark-bot（已有安装不受影响；--with-lark-bot 可强制安装）${NC}"
-    SUMMARY="${SUMMARY}  lark-bot       : 已跳过\n"
+    echo -e "\n${YELLOW}>>> 4. [跳过] 本次不安装 codex-lark-bot（已有安装不受影响；--with-codex-bot 可强制安装）${NC}"
+    SUMMARY="${SUMMARY}  codex-lark-bot : 已跳过\n"
 fi
 
 # ==========================================
@@ -433,6 +483,27 @@ elif [ "$WITH_OMP_BOT" = "yes" ]; then
     SUMMARY="${SUMMARY}  omp-lark-bot   : 未检测到 ~/.omp，跳过\n"
 else
     SUMMARY="${SUMMARY}  omp-lark-bot   : 不适用（无 ~/.omp）\n"
+fi
+
+# ==========================================
+# 4c. 可选组件：claude-lark-bot
+# 需要已安装 claude CLI；使用独立配置目录与飞书 app/profile
+# ==========================================
+if command -v claude >/dev/null 2>&1 || [ -d "$CLAUDE_BOT_HOME" ]; then
+    if claude_bot_installed; then claude_installed=1; else claude_installed=0; fi
+    decide_component "$WITH_CLAUDE_BOT" "$claude_installed" "claude-lark-bot"
+    if [ "$DECIDED" = "yes" ]; then
+        install_claude_bot
+        SUMMARY="${SUMMARY}  claude-lark-bot: 已部署 (~/.claude/lark-bot)\n"
+    else
+        echo -e "\n${YELLOW}>>> 4c. [跳过] 本次不安装 claude-lark-bot${NC}"
+        SUMMARY="${SUMMARY}  claude-lark-bot: 已跳过\n"
+    fi
+elif [ "$WITH_CLAUDE_BOT" = "yes" ]; then
+    echo -e "\n${YELLOW}>>> 4c. [跳过] 未检测到 claude CLI，无法部署 claude-lark-bot${NC}"
+    SUMMARY="${SUMMARY}  claude-lark-bot: 未检测到 claude，跳过\n"
+else
+    SUMMARY="${SUMMARY}  claude-lark-bot: 不适用（无 claude）\n"
 fi
 
 # ==========================================

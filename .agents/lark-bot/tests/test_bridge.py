@@ -107,6 +107,7 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(bridge.parse_command("/pwd"), ("pwd", ""))
         self.assertEqual(bridge.parse_command("/CD /tmp"), ("cd", "/tmp"))
         self.assertEqual(bridge.parse_command('/cd "a b"'), ("cd", "a b"))
+        self.assertEqual(bridge.parse_command("/paper-start"), ("paper-start", ""))
         self.assertIsNone(bridge.parse_command("状态"))
         self.assertIsNone(bridge.parse_command("普通任务"))
         self.assertIsNone(bridge.parse_command("/"))
@@ -347,6 +348,103 @@ JSON
             cfg.lark_args("auth", "status"),
             ["/opt/lark-cli", "--profile", "omp-bot", "auth", "status"],
         )
+
+
+class ClaudeRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.cfg = make_cfg(self.root)
+        self.cfg.agent_kind = "claude"
+        self.cfg.codex_bin = "claude"
+        self.state = bridge.State(self.cfg.db_path)
+
+    def tearDown(self):
+        self.state.close()
+        self.tmp.cleanup()
+
+    def test_build_args_new_and_resume(self):
+        runner = bridge.CodexRunner(self.cfg, self.state)
+        args, cwd = runner._build_args("hi", "", self.root / "last.txt", self.cfg.workdir)
+        self.assertEqual(cwd, self.cfg.workdir)
+        self.assertEqual(args[0], "claude")
+        self.assertIn("-p", args)
+        self.assertEqual(args[args.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", args)
+        self.assertEqual(
+            args[args.index("--permission-mode") + 1], "bypassPermissions"
+        )
+        self.assertIn("hi", args)
+        if "--add-dir" in args:
+            self.assertLess(args.index("hi"), args.index("--add-dir"))
+        resumed, _ = runner._build_args("again", "claude-sess-1",
+                                        self.root / "last.txt", self.cfg.workdir)
+        self.assertIn("--resume", resumed)
+        self.assertEqual(resumed[resumed.index("--resume") + 1], "claude-sess-1")
+
+    def test_claude_stream(self):
+        fake = self.root / "fake-claude"
+        fake.write_text(
+            """#!/usr/bin/env bash
+cat <<'JSON'
+{"type":"system","subtype":"init","session_id":"claude-sess-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"pwd"}},{"type":"tool_use","id":"t2","name":"WebSearch","input":{"query":"robot paper"}}]},"session_id":"claude-sess-1"}
+{"type":"result","subtype":"success","is_error":false,"result":"final claude","session_id":"claude-sess-1"}
+JSON
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        self.cfg.codex_bin = str(fake)
+        ev = make_event()
+        task = {
+            "id": 9,
+            "session_key": "oc_test",
+            "chat_id": "oc_test",
+            "prompt": "hello",
+            "cwd": str(self.cfg.workdir),
+            "event_json": json.dumps(ev.raw, ensure_ascii=False),
+        }
+        progress: list[str] = []
+        result = bridge.CodexRunner(self.cfg, self.state).run(
+            task, ev, "hello", threading.Event(), on_progress=progress.append
+        )
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.text, "final claude")
+        self.assertEqual(result.thread_id, "claude-sess-1")
+        self.assertEqual(len(progress), 1)
+        self.assertIn("执行摘要（2 项）", progress[0])
+        self.assertIn("pwd", progress[0])
+        self.assertIn("robot paper", progress[0])
+        key = bridge.session_key_for_cwd("oc_test", self.cfg.workdir)
+        self.assertEqual(self.state.get_session(key)["thread_id"], "claude-sess-1")
+
+    def test_load_config_claude_and_paper_defaults(self):
+        work = self.root / "claude-work"
+        work.mkdir()
+        paper_home = self.root / "shared-papers"
+        (self.root / "config.env").write_text(
+            "\n".join([
+                "OWNER_ID=ou_owner",
+                "AGENT_KIND=claude",
+                "CLAUDE_WORKDIR=" + str(work),
+                "CLAUDE_BIN=/opt/claude",
+                "PAPER_HOME=" + str(paper_home),
+                "PAPER_PUSH_TIME=07:45",
+                "PAPER_MIN=3",
+                "PAPER_MAX=6",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        cfg = bridge.load_config(self.root)
+        self.assertEqual(cfg.agent_kind, "claude")
+        self.assertEqual(cfg.workdir, work)
+        self.assertEqual(cfg.codex_bin, "/opt/claude")
+        self.assertEqual(cfg.task_timeout, 7200)
+        self.assertEqual(cfg.paper_home, paper_home)
+        self.assertEqual(cfg.paper_topics_file, paper_home / "topics.json")
+        self.assertEqual(cfg.paper_push_time, "07:45")
+        self.assertEqual((cfg.paper_min, cfg.paper_max), (3, 6))
 
 
 if __name__ == "__main__":
