@@ -63,6 +63,8 @@ class Config:
     bot_open_id: str = ""
     session_scope: str = "chat"
     progress: bool = True
+    quiet: bool = False
+    card_actions: bool = True
     progress_batch_seconds: float = 60.0
     progress_batch_items: int = 10
     reply_format: str = "markdown"
@@ -234,6 +236,8 @@ def load_config(home: Path) -> Config:
         bot_open_id=pick("BOT_OPEN_ID", ""),
         session_scope=pick("SESSION_SCOPE", "chat").strip().lower(),
         progress=pick_bool("PROGRESS", True),
+        quiet=pick_bool("QUIET", False),
+        card_actions=pick_bool("CARD_ACTIONS", True),
         progress_batch_seconds=max(1.0, pick_float("PROGRESS_BATCH_SECONDS", 60.0)),
         progress_batch_items=max(1, pick_int("PROGRESS_BATCH_ITEMS", 10)),
         reply_format=pick("REPLY_FORMAT", "markdown").strip().lower(),
@@ -373,6 +377,39 @@ class State:
                     cwd TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, id);
+                CREATE TABLE IF NOT EXISTS task_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    at INTEGER NOT NULL,
+                    data_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_events_task
+                    ON task_events(task_id, id);
+                CREATE TABLE IF NOT EXISTS pending_asks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    session_key TEXT NOT NULL,
+                    cwd TEXT NOT NULL DEFAULT '',
+                    key TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    text TEXT NOT NULL DEFAULT '',
+                    options_json TEXT NOT NULL DEFAULT '[]',
+                    recommend INTEGER,
+                    about TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'open',
+                    card_message_id TEXT NOT NULL DEFAULT '',
+                    choice INTEGER,
+                    answer TEXT,
+                    answered_by TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    decided_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_pending_asks_state
+                    ON pending_asks(state, id);
+                CREATE INDEX IF NOT EXISTS idx_pending_asks_chat
+                    ON pending_asks(chat_id, state);
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -465,6 +502,36 @@ class State:
                 (key, str(cwd), self.now_ms()),
             )
 
+    def _record_event(self, task_id: int, event_type: str,
+                      data: dict[str, Any] | None = None) -> None:
+        """Append one task fact.  Caller owns the transaction."""
+        self.conn.execute(
+            "INSERT INTO task_events(task_id, type, at, data_json) VALUES(?, ?, ?, ?)",
+            (int(task_id), event_type, self.now_ms(),
+             json.dumps(data or {}, ensure_ascii=False)),
+        )
+
+    def log_task_event(self, task_id: int, event_type: str,
+                       data: dict[str, Any] | None = None) -> None:
+        with self.lock, self.conn:
+            self._record_event(task_id, event_type, data)
+
+    def task_events(self, task_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT * FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT ?",
+                (int(task_id), max(1, int(limit))),
+            ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in reversed(rows):
+            item = dict(row)
+            try:
+                item["data"] = json.loads(item.get("data_json") or "{}")
+            except ValueError:
+                item["data"] = {}
+            events.append(item)
+        return events
+
     def enqueue(self, message_id: str, session_key: str, chat_id: str, prompt: str,
                 event_json: str = "{}", cwd: str = "") -> int:
         with self.lock, self.conn:
@@ -474,7 +541,9 @@ class State:
                 (message_id, session_key, chat_id, prompt, self.now_ms(), event_json, cwd),
             )
             if cur.rowcount:
-                return int(cur.lastrowid)
+                task_id = int(cur.lastrowid)
+                self._record_event(task_id, "queued", {"prompt": clip(prompt, 200)})
+                return task_id
             row = self.conn.execute(
                 "SELECT id FROM tasks WHERE message_id = ?", (message_id,)
             ).fetchone()
@@ -490,12 +559,20 @@ class State:
         """
         with self.lock, self.conn:
             row = self.conn.execute(
-                "SELECT id FROM tasks WHERE message_id = ?", (message_id,)
+                "SELECT * FROM tasks WHERE message_id = ?", (message_id,)
             ).fetchone()
             if row is None:
                 return self.enqueue(
                     message_id, session_key, chat_id, prompt, event_json, cwd
                 )
+            self._record_event(
+                int(row["id"]), "requeued",
+                {
+                    "previous_status": row["status"],
+                    "previous_error": clip(str(row["error"] or ""), 300),
+                    "previous_result": clip(str(row["result"] or ""), 300),
+                },
+            )
             self.conn.execute(
                 "UPDATE tasks SET session_key=?, chat_id=?, prompt=?, status='queued', "
                 "pid=NULL, created_at=?, started_at=NULL, ended_at=NULL, "
@@ -517,25 +594,73 @@ class State:
                 "WHERE id = ? AND status = 'queued'",
                 (self.now_ms(), row["id"]),
             )
+            self._record_event(int(row["id"]), "started")
             updated = self.conn.execute(
                 "SELECT * FROM tasks WHERE id = ?", (row["id"],)
             ).fetchone()
             return dict(updated) if updated else None
 
-    def finish_task(self, task_id: int, status: str, result: str = "", error: str = "") -> None:
-        with self.lock, self.conn:
-            self.conn.execute(
-                "UPDATE tasks SET status = ?, ended_at = ?, result = ?, error = ? WHERE id = ?",
-                (status, self.now_ms(), result[:20000], error[:2000], task_id),
-            )
-
-    def recover_running(self) -> int:
-        """Requeue tasks left in running state by a crash/restart."""
+    def set_task_pid(self, task_id: int, pid: int) -> None:
         with self.lock, self.conn:
             cur = self.conn.execute(
-                "UPDATE tasks SET status='queued', started_at=NULL WHERE status='running'"
+                "UPDATE tasks SET pid = ? WHERE id = ? AND status = 'running'",
+                (int(pid), int(task_id)),
             )
-            return cur.rowcount
+            if cur.rowcount:
+                self._record_event(task_id, "process", {"pid": int(pid)})
+
+    def finish_task(self, task_id: int, status: str, result: str = "", error: str = "") -> None:
+        with self.lock, self.conn:
+            row = self.conn.execute(
+                "SELECT status FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            self.conn.execute(
+                "UPDATE tasks SET status = ?, ended_at = ?, result = ?, error = ?, "
+                "pid = NULL WHERE id = ?",
+                (status, self.now_ms(), result[:20000], error[:2000], task_id),
+            )
+            self._record_event(
+                task_id, f"finished:{status}",
+                {
+                    "previous_status": row["status"] if row else "",
+                    "error": clip(error, 500),
+                    "result": clip(result, 500),
+                },
+            )
+
+    def recover_running(self, alive: callable | None = None,
+                        terminate: callable | None = None) -> int:
+        """Requeue tasks left running by a crash, killing orphaned agent groups.
+
+        The bridge cannot collect an orphan's stdout after restart.  Requeueing
+        while it is still running would duplicate work, so terminate the old
+        process group first and let the task run again.
+        """
+        alive = alive or pid_alive
+        terminate = terminate or terminate_process_group
+        with self.lock, self.conn:
+            rows = self.conn.execute(
+                "SELECT id, pid FROM tasks WHERE status = 'running'"
+            ).fetchall()
+            for row in rows:
+                pid = int(row["pid"] or 0)
+                killed = False
+                if pid and alive(pid):
+                    try:
+                        terminate(pid)
+                        killed = True
+                    except Exception:  # noqa: BLE001
+                        logging.exception("终止孤儿任务进程失败 task=%s pid=%s", row["id"], pid)
+                self.conn.execute(
+                    "UPDATE tasks SET status='queued', started_at=NULL, pid=NULL "
+                    "WHERE id=?",
+                    (row["id"],),
+                )
+                self._record_event(
+                    int(row["id"]), "recovered",
+                    {"pid": pid, "orphan_killed": killed},
+                )
+            return len(rows)
 
     def queue_len(self) -> int:
         with self.lock:
@@ -549,6 +674,89 @@ class State:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    @staticmethod
+    def _ask_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["options"] = json.loads(item.get("options_json") or "[]")
+        except ValueError:
+            item["options"] = []
+        return item
+
+    def create_ask(self, task_id: int, chat_id: str, session_key: str, cwd: str,
+                   title: str, text: str, options: list[str],
+                   recommend: int | None = None, about: str = "",
+                   key: str = "") -> int:
+        with self.lock, self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO pending_asks(task_id, chat_id, session_key, cwd, key, "
+                "title, text, options_json, recommend, about, created_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (task_id, chat_id, session_key, cwd, key, clip(title, 200),
+                 clip(text, 2000), json.dumps(options, ensure_ascii=False),
+                 recommend, clip(about, 2000), self.now_ms()),
+            )
+            ask_id = int(cur.lastrowid)
+            self._record_event(task_id, "asked", {"ask_id": ask_id, "title": clip(title, 120)})
+            return ask_id
+
+    def set_ask_card(self, ask_id: int, message_id: str) -> None:
+        with self.lock, self.conn:
+            self.conn.execute(
+                "UPDATE pending_asks SET card_message_id = ? WHERE id = ?",
+                (str(message_id or ""), int(ask_id)),
+            )
+
+    def get_ask(self, ask_id: int) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM pending_asks WHERE id = ?", (int(ask_id),)
+            ).fetchone()
+        return self._ask_row(row)
+
+    def open_asks(self, chat_id: str = "") -> list[dict[str, Any]]:
+        with self.lock:
+            if chat_id:
+                rows = self.conn.execute(
+                    "SELECT * FROM pending_asks WHERE state = 'open' AND chat_id = ? "
+                    "ORDER BY id",
+                    (chat_id,),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT * FROM pending_asks WHERE state = 'open' ORDER BY id"
+                ).fetchall()
+        return [item for item in (self._ask_row(row) for row in rows) if item]
+
+    def answer_ask(self, ask_id: int, choice: int | None, answer: str,
+                   answered_by: str) -> dict[str, Any] | None:
+        """Atomically settle one open ask; later clicks are ignored."""
+        with self.lock, self.conn:
+            row = self.conn.execute(
+                "SELECT * FROM pending_asks WHERE id = ? AND state = 'open'",
+                (int(ask_id),),
+            ).fetchone()
+            if row is None:
+                return None
+            cur = self.conn.execute(
+                "UPDATE pending_asks SET state='answered', choice=?, answer=?, "
+                "answered_by=?, decided_at=? WHERE id=? AND state='open'",
+                (choice, clip(answer, 2000), answered_by, self.now_ms(), int(ask_id)),
+            )
+            if cur.rowcount <= 0:
+                return None
+            self._record_event(
+                int(row["task_id"]), "answered",
+                {"ask_id": int(ask_id), "choice": choice, "answer": clip(answer, 300),
+                 "by": answered_by},
+            )
+            updated = self.conn.execute(
+                "SELECT * FROM pending_asks WHERE id = ?", (int(ask_id),)
+            ).fetchone()
+            return self._ask_row(updated)
+
     def status_summary(self) -> dict[str, Any]:
         with self.lock:
             counts = {
@@ -558,7 +766,16 @@ class State:
                 ).fetchall()
             }
             sessions = int(self.conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"])
-        return {"tasks": counts, "sessions": sessions, "queue": self.queue_len()}
+            open_asks = int(self.conn.execute(
+                "SELECT COUNT(*) AS n FROM pending_asks WHERE state='open'"
+            ).fetchone()["n"])
+        return {
+            "tasks": counts,
+            "sessions": sessions,
+            "queue": self.queue_len(),
+            "waiting_tasks": counts.get("waiting", 0),
+            "open_asks": open_asks,
+        }
 
     def close(self) -> None:
         with self.lock:
@@ -662,6 +879,98 @@ def strip_mentions(ev: Event, text: str) -> str:
     return text.strip()
 
 
+ASK_BLOCK_RE = re.compile(r"```(?:lark-bot|lark-ask)[ \t]*\r?\n([\s\S]*?)```", re.I)
+
+
+def parse_agent_reply(text: str) -> tuple[str, dict[str, Any] | None, str]:
+    """Split one optional structured ask from the agent's final message.
+
+    The agent writes a fenced ``lark-bot`` block at the end.  The block is
+    removed before the text is sent to Feishu.  A malformed block is dropped
+    (the human still gets the prose) and the error is returned for logging.
+    """
+    raw = text or ""
+    blocks = list(ASK_BLOCK_RE.finditer(raw))
+    if not blocks:
+        return raw, None, ""
+    block = blocks[-1]
+    clean = (raw[:block.start()] + raw[block.end():]).strip()
+    try:
+        payload = json.loads(block.group(1))
+    except ValueError as exc:
+        return clean, None, f"回执不是合法 JSON: {exc}"
+    if not isinstance(payload, dict):
+        return clean, None, "回执必须是 JSON 对象"
+    value = payload.get("ask")
+    if value is None:
+        return clean, None, ""
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list) or not value:
+        return clean, None, "ask 必须是非空数组"
+    item = value[0]
+    if not isinstance(item, dict):
+        return clean, None, "ask 的每一项必须是对象"
+    title = str(item.get("title") or "").strip()
+    body = str(item.get("text") or "").strip()
+    options = [
+        str(option).strip() for option in (item.get("options") or [])
+        if str(option).strip()
+    ][:8]
+    if not title or not options:
+        return clean, None, "ask 必须包含 title 和 options"
+    recommend = item.get("recommend")
+    try:
+        recommend = int(recommend) if recommend is not None else None
+    except (TypeError, ValueError):
+        recommend = None
+    if recommend is not None and not 0 <= recommend < len(options):
+        recommend = None
+    return clean, {
+        "title": title[:200],
+        "text": body[:2000],
+        "options": options,
+        "recommend": recommend,
+        "about": str(item.get("about") or "")[:2000],
+        "key": str(item.get("key") or "")[:120],
+    }, ("" if len(value) == 1 else "一次只处理一个 ask，其余已忽略")
+
+
+def parse_card_action(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalise the fields lark-cli emits for a card button click."""
+    value = payload.get("action_value")
+    if value is None:
+        action = payload.get("action")
+        if isinstance(action, dict):
+            value = action.get("value")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    raw_ask = value.get("ask", value.get("card"))
+    raw_choice = value.get("choice")
+    try:
+        ask_id = int(raw_ask)
+        choice = int(raw_choice)
+    except (TypeError, ValueError):
+        return None
+    operator = payload.get("operator_id")
+    if not operator and isinstance(payload.get("operator"), dict):
+        operator = payload["operator"].get("open_id")
+    message_id = payload.get("message_id") or payload.get("open_message_id")
+    if not message_id and isinstance(payload.get("context"), dict):
+        message_id = payload["context"].get("open_message_id")
+    return {
+        "ask_id": ask_id,
+        "choice": choice,
+        "operator_id": str(operator or ""),
+        "message_id": str(message_id or ""),
+    }
+
+
 def session_key_for(cfg: Config, ev: Event) -> str:
     if cfg.session_scope == "thread":
         return ev.thread_id or ev.root_id or ev.chat_id
@@ -738,6 +1047,72 @@ def clip(text: str, limit: int = MAX_PROGRESS_TEXT) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def render_ask_card(ask: dict[str, Any]) -> dict[str, Any]:
+    """Classic interactive-card JSON, accepted by lark-cli's interactive mode."""
+    title = str(ask.get("title") or "需要你确认")
+    text = str(ask.get("text") or "")
+    options = [str(x) for x in (ask.get("options") or [])]
+    recommend = ask.get("recommend")
+    elements: list[dict[str, Any]] = []
+    if text:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": text}})
+    actions = []
+    for index, option in enumerate(options):
+        label = f"{index + 1}. {option}"
+        if recommend == index:
+            label += "（推荐）"
+        actions.append({
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label[:80]},
+            "type": "primary" if recommend == index else "default",
+            "value": {"ask": ask.get("id"), "choice": index},
+        })
+    if actions:
+        elements.append({"tag": "action", "actions": actions})
+    elements.append({
+        "tag": "note",
+        "elements": [{
+            "tag": "plain_text",
+            "content": f"也可以回复 /answer {ask.get('id')} <选项序号>",
+        }],
+    })
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": title[:80]},
+            "template": "blue",
+        },
+        "elements": elements,
+    }
+
+
+def render_answered_card(ask: dict[str, Any], chosen: str) -> dict[str, Any]:
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": str(ask.get("title") or "已确认")[:80]},
+            "template": "green",
+        },
+        "elements": [{
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"你选择了：**{chosen}**\n已继续处理。"},
+        }],
+    }
+
+
+def ask_text(ask: dict[str, Any]) -> str:
+    options = " / ".join(
+        f"{index}. {option}" for index, option in enumerate(ask.get("options") or [], 1)
+    )
+    parts = [f"⏸ 需要确认：{ask.get('title')}"]
+    if ask.get("text"):
+        parts.append(str(ask["text"]))
+    if options:
+        parts.append(f"选项：{options}")
+    parts.append(f"回复 `/answer {ask.get('id')} <选项序号>` 继续。")
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Feishu client
 # ---------------------------------------------------------------------------
@@ -747,13 +1122,15 @@ class FeishuClient:
         self.cfg = cfg
         self.env = cfg.feishu_env()
 
-    def _run(self, args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    def _run(self, args: list[str], timeout: int = 60,
+             input_text: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             self.cfg.lark_args(*args),
             capture_output=True,
             text=True,
             env=self.env,
             timeout=timeout,
+            input=input_text,
         )
 
     @staticmethod
@@ -820,6 +1197,67 @@ class FeishuClient:
                 logging.error("发送飞书消息失败 chat=%s: %s", chat_id, clip(last_error, 500))
         return ok_all
 
+    @staticmethod
+    def _message_id(proc: subprocess.CompletedProcess[str]) -> str:
+        for line in reversed((proc.stdout or "").strip().splitlines()):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            value = data.get("message_id") or payload.get("message_id")
+            if value:
+                return str(value)
+        return ""
+
+    def send_card(self, chat_id: str, card: dict[str, Any],
+                  idempotency_key: str = "") -> tuple[bool, str, str]:
+        """Send one interactive card; returns (ok, message_id, error)."""
+        target = "--user-id" if chat_id.startswith("ou_") else "--chat-id"
+        args = ["im", "+messages-send", "--as", "bot", target, chat_id,
+                "--msg-type", "interactive", "--content", "-"]
+        if idempotency_key:
+            args += ["--idempotency-key", idempotency_key[:50]]
+        body = json.dumps(card, ensure_ascii=False)
+        last_error = ""
+        for attempt in range(3):
+            try:
+                proc = self._run(args, input_text=body)
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+            else:
+                if self._ok(proc):
+                    return True, self._message_id(proc), ""
+                last_error = (proc.stderr or proc.stdout or "").strip()
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+        logging.error("发送飞书卡片失败 chat=%s: %s", chat_id, clip(last_error, 500))
+        return False, "", last_error
+
+    def update_card(self, message_id: str, card: dict[str, Any]) -> bool:
+        if not message_id:
+            return False
+        args = ["im", "messages", "patch", "--message-id", message_id,
+                "--as", "bot", "--data", "-"]
+        body = json.dumps(
+            {"content": json.dumps(card, ensure_ascii=False)},
+            ensure_ascii=False,
+        )
+        try:
+            proc = self._run(args, input_text=body)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("更新飞书卡片异常 message=%s: %s", message_id, exc)
+            return False
+        if not self._ok(proc):
+            logging.warning(
+                "更新飞书卡片失败 message=%s: %s",
+                message_id, clip((proc.stderr or proc.stdout or "").strip(), 300),
+            )
+            return False
+        return True
+
 
 # ---------------------------------------------------------------------------
 # Codex runner
@@ -860,7 +1298,17 @@ class CodexRunner:
             "- 可以联网搜索资料（WebSearch/WebFetch/curl），引用外部信息时附上来源链接。\n"
             "- 论文任务优先使用 [bridge 论文上下文] 里的素材；只有摘要时必须注明"
             "“仅基于摘要判断”，不得编造实验数字、数据集或开源状态。\n"
-            "- 删除、重置、推送、发布等高风险操作，先在答复中说明并等待确认，不要直接执行。\n"
+            "- 删除、重置、推送、发布等高风险操作，不要直接执行；用下面的 ask 回执"
+            "让主人确认后再继续。\n"
+            "- 需要主人做决定时，不要停在对话里等。把问题写进最后一条消息末尾的 "
+            "```lark-bot 回执```，然后结束这一轮；回答后会恢复当前会话继续。\n"
+            "  回执格式（只写一个 ask；一轮最多问一个问题）：\n"
+            "  ```lark-bot\n"
+            '  {"ask":[{"title":"一句话说明要决定什么","text":"三行以内说明背景",'
+            '"options":["选项一","选项二"],"recommend":0,'
+            '"about":"留给下一次接着干的背景和每个选项的具体做法","key":"固定名字"}]}\n'
+            "  ```\n"
+            "- 能自己处理的事情不要问；已经决定过的事情不要重复问。\n"
         )
 
     def _build_args(self, prompt: str, thread_id: str, last_file: Path,
@@ -988,6 +1436,11 @@ class CodexRunner:
             )
         except Exception as exc:  # noqa: BLE001
             return CodexResult(ok=False, text="", error=f"启动 {self.cfg.agent_kind} 失败: {exc}")
+
+        try:
+            self.state.set_task_pid(int(task["id"]), int(proc.pid))
+        except Exception:  # noqa: BLE001
+            logging.exception("记录任务进程失败 task=%s pid=%s", task.get("id"), proc.pid)
 
         out_queue: queue.Queue[str | None] = queue.Queue()
         err_lines: list[str] = []
@@ -1356,27 +1809,73 @@ class Worker(threading.Thread):
                 text = self.papers.prepare_text(text)
             except Exception:  # noqa: BLE001
                 logging.exception("论文素材预取失败 task=%s", task["id"])
-        self.feishu.send(task["chat_id"], f"🤖 开始处理：{clip(text, 100)}", markdown=False,
-                         idempotency_key=f"ack-{task['id']}")
+        if not self.cfg.quiet:
+            self.feishu.send(task["chat_id"], f"🤖 开始处理：{clip(text, 100)}", markdown=False,
+                             idempotency_key=f"ack-{task['id']}")
         result = self.runner.run(
             task, ev, text, self.cancel_event,
-            on_progress=lambda message: self.feishu.send(task["chat_id"], message),
+            on_progress=(
+                None if self.cfg.quiet
+                else lambda message: self.feishu.send(task["chat_id"], message)
+            ),
         )
         session_key = str(task.get("session_key") or "")
         is_digest = session_key.startswith("paper-digest")
         digest_date = session_key.split(":", 1)[-1] if is_digest else ""
-        if result.ok and self.papers is not None:
-            try:
-                result.text = self.papers.postprocess(result.text, task)
-            except Exception:  # noqa: BLE001
-                logging.exception("论文笔记后处理失败 task=%s", task["id"])
+
+        result.text, ask, ask_error = parse_agent_reply(result.text)
+        if ask_error:
+            logging.warning("任务 %s 的结构化回执无法解析: %s", task["id"], ask_error)
+
         if result.canceled:
             self.state.finish_task(task["id"], "canceled", result.text, result.error)
             if is_digest and self.papers is not None:
                 self.papers.mark_digest_failed(digest_date, "任务被停止")
             self.feishu.send(task["chat_id"], "⏹ 任务已停止。", markdown=False,
                              idempotency_key=f"stop-{task['id']}")
-        elif result.ok:
+            return
+        if result.ok and ask:
+            self.state.finish_task(task["id"], "waiting", result.text, "")
+            if is_digest and self.papers is not None:
+                self.papers.mark_digest_waiting(digest_date, ask.get("title") or "等待确认")
+            if result.text:
+                self.feishu.send(task["chat_id"], result.text, reply_to=task["message_id"],
+                                 markdown=True, idempotency_key=f"wait-{task['id']}")
+            try:
+                ask_id = self.state.create_ask(
+                    int(task["id"]), str(task["chat_id"]), session_key,
+                    str(task.get("cwd") or ""), ask["title"], ask["text"],
+                    ask["options"], ask.get("recommend"), ask.get("about", ""),
+                    ask.get("key", ""),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("保存待确认事项失败 task=%s", task["id"])
+                self.state.finish_task(task["id"], "failed", result.text,
+                                       f"保存待确认事项失败: {exc}")
+                self.feishu.send(task["chat_id"], f"❌ 保存待确认事项失败：{exc}",
+                                 reply_to=task["message_id"], markdown=False,
+                                 idempotency_key=f"ask-fail-{task['id']}")
+                return
+            ask["id"] = ask_id
+            sent, card_message_id, error = self.feishu.send_card(
+                task["chat_id"], render_ask_card(ask),
+                idempotency_key=f"ask-{ask_id}",
+            )
+            if sent:
+                if card_message_id:
+                    self.state.set_ask_card(ask_id, card_message_id)
+            else:
+                logging.warning("卡片发送失败，退回文字确认 ask=%s: %s", ask_id, error)
+                self.feishu.send(task["chat_id"], ask_text(ask), reply_to=task["message_id"],
+                                 markdown=False, idempotency_key=f"ask-text-{ask_id}")
+            return
+
+        if result.ok and self.papers is not None:
+            try:
+                result.text = self.papers.postprocess(result.text, task)
+            except Exception:  # noqa: BLE001
+                logging.exception("论文笔记后处理失败 task=%s", task["id"])
+        if result.ok:
             self.state.finish_task(task["id"], "done", result.text, "")
             if is_digest and self.papers is not None:
                 self.papers.mark_digest_done(digest_date, result.text)
@@ -1601,6 +2100,89 @@ class ConsumerSupervisor:
                              reply_to=ev.message_id, markdown=False,
                              idempotency_key=f"queue-{task_id}")
 
+    def _resume_after_answer(self, ask: dict[str, Any], choice: int | None,
+                             answer: str, answered_by: str) -> bool:
+        """Settle one ask and enqueue a turn that resumes its original session."""
+        if answered_by != self.cfg.owner_id:
+            logging.warning("拒绝非主人回答 ask=%s by=%s", ask.get("id"), answered_by)
+            return False
+        updated = self.state.answer_ask(int(ask["id"]), choice, answer, answered_by)
+        if updated is None:
+            return False
+        prompt = (
+            "[主人回答]\n"
+            f"之前的问题：{ask.get('title')}\n"
+            f"主人的回答：{answer}\n"
+        )
+        if ask.get("about"):
+            prompt += f"背景：{ask['about']}\n"
+        prompt += (
+            "请接着原来的会话继续完成剩余工作，不要重复已经完成的步骤。"
+            "如果还有需要主人决定的地方，按约定格式再写一个 ask 回执。"
+        )
+        event = {
+            "message_id": f"ask-answer-{ask['id']}-{self.state.now_ms()}",
+            "chat_id": ask["chat_id"],
+            "chat_type": "p2p",
+            "sender_id": answered_by,
+            "sender_type": "user",
+            "message_type": "text",
+            "content": prompt,
+            "create_time": str(self.state.now_ms()),
+            "mentions": [],
+            "kind": "ask_answer",
+        }
+        try:
+            task_id = self.state.enqueue(
+                event["message_id"], ask["session_key"], ask["chat_id"], prompt,
+                json.dumps(event, ensure_ascii=False), ask.get("cwd") or "",
+            )
+        except Exception:  # noqa: BLE001
+            logging.exception("回答后重新入队失败 ask=%s", ask["id"])
+            return False
+        if task_id <= 0:
+            logging.error("回答后重新入队失败 ask=%s", ask["id"])
+            return False
+        update_card = getattr(self.feishu, "update_card", None)
+        card_id = str(updated.get("card_message_id") or "")
+        if card_id and update_card is not None:
+            update_card(card_id, render_answered_card(updated, answer))
+        logging.info("已记录回答 ask=%s task=%s；已恢复原会话", ask["id"], task_id)
+        return True
+
+    def _handle_answer_command(self, arg: str, ev: Event) -> str:
+        if ev.sender_id != self.cfg.owner_id:
+            return "❌ 只有主人可以回答待确认问题。"
+        parts = arg.strip().split(maxsplit=1)
+        if not parts:
+            return "用法：`/answer <id> <选项序号或选项文字>`"
+        try:
+            ask_id = int(parts[0].lstrip("#"))
+        except ValueError:
+            return "用法：`/answer <id> <选项序号或选项文字>`"
+        ask = self.state.get_ask(ask_id)
+        if ask is None or ask.get("chat_id") != ev.chat_id:
+            return f"❌ 找不到当前会话的待确认问题 #{ask_id}。"
+        if ask.get("state") != "open":
+            return f"✅ 问题 #{ask_id} 已经回答过了。"
+        raw = parts[1].strip() if len(parts) > 1 else ""
+        if not raw:
+            return f"用法：`/answer {ask_id} <选项序号或选项文字>`"
+        options = [str(x) for x in (ask.get("options") or [])]
+        choice: int | None = None
+        answer = raw
+        if raw.isdigit():
+            index = int(raw) - 1
+            if not 0 <= index < len(options):
+                return f"❌ 选项序号超出范围（1-{len(options)}）。"
+            choice = index
+            answer = options[index]
+        elif raw in options:
+            choice = options.index(raw)
+        if not self._resume_after_answer(ask, choice, answer, ev.sender_id):
+            return f"❌ 问题 #{ask_id} 已处理或无法恢复。"
+        return f"✅ 已记录：{answer}\n继续处理中。"
+
     def _handle_command(self, name: str, arg: str, ev: Event) -> None:
         base_key = session_key_for(self.cfg, ev)
         cwd = self.state.get_cwd(base_key, self.cfg.workdir)
@@ -1613,6 +2195,9 @@ class ConsumerSupervisor:
                 "`/pwd`：显示当前工作目录\n"
                 "`/cd <path>`：切换工作目录（每个目录独立会话）\n"
                 "`/status`：查看任务、队列和当前线程\n"
+                "`/asks`：列出等待你确认的问题\n"
+                "`/answer <id> <选项>`：回答待确认问题并继续原任务\n"
+                "`/why <task_id>`：查看任务事件时间线\n"
                 "`/new`：清除当前目录的对话上下文\n"
                 "`/stop`：终止当前任务\n"
                 "`/paper-start`：启用本实例的每日论文推送\n"
@@ -1653,11 +2238,71 @@ class ConsumerSupervisor:
                 f"- 当前目录：`{cwd}`",
                 f"- 运行中任务：{len(running)}",
                 f"- 排队任务：{summary['queue']}",
+                f"- 等待确认：{summary.get('open_asks', 0)}",
                 f"- 会话线程：{str(session['thread_id'])[:12] + '…' if session else '无'}",
             ]
             if current:
                 parts.append(f"- 当前：# {current['id']} {clip(current['prompt'], 80)}")
             text = "\n".join(parts)
+        elif name == "asks":
+            asks = self.state.open_asks(ev.chat_id)
+            if not asks:
+                text = "✅ 当前没有等待确认的问题。"
+            else:
+                lines = ["⏸ 等待确认："]
+                for ask in asks:
+                    options = " / ".join(
+                        f"{i}. {option}"
+                        for i, option in enumerate(ask.get("options") or [], 1)
+                    )
+                    lines.append(
+                        f"- #{ask['id']} {ask['title']}"
+                        + (f"\n  选项：{options}" if options else "")
+                    )
+                lines.append("回复 `/answer <id> <选项序号>` 继续。")
+                text = "\n".join(lines)
+        elif name == "answer":
+            text = self._handle_answer_command(arg, ev)
+        elif name == "why":
+            raw = arg.strip().lstrip("#")
+            try:
+                task_id = int(raw)
+            except ValueError:
+                text = "用法：`/why <task_id>`"
+            else:
+                events = self.state.task_events(task_id)
+                if not events:
+                    text = f"没有任务 #{task_id} 的事件记录。"
+                else:
+                    lines = [f"🧭 任务 #{task_id} 时间线："]
+                    for event in events[-30:]:
+                        stamp = time.strftime(
+                            "%m-%d %H:%M:%S", time.localtime(event["at"] / 1000)
+                        )
+                        data = event.get("data") or {}
+                        detail = ""
+                        if event["type"] == "started":
+                            detail = "开始运行"
+                        elif event["type"].startswith("finished:"):
+                            detail = event["type"].split(":", 1)[1]
+                            if data.get("error"):
+                                detail += f" · {clip(str(data['error']), 80)}"
+                        elif event["type"] == "requeued":
+                            detail = f"重新排队（之前 {data.get('previous_status', '?')}）"
+                        elif event["type"] == "recovered":
+                            detail = "重启恢复"
+                            if data.get("orphan_killed"):
+                                detail += "，已终止孤儿进程"
+                        elif event["type"] == "asked":
+                            detail = f"等待确认：{data.get('title', '')}"
+                        elif event["type"] == "answered":
+                            detail = f"已回答：{data.get('answer', '')}"
+                        elif event["type"] == "process":
+                            detail = f"pid={data.get('pid', '?')}"
+                        else:
+                            detail = str(data)
+                        lines.append(f"- {stamp} {event['type']} {clip(detail, 100)}")
+                    text = "\n".join(lines)
         elif name == "new":
             self.state.clear_session(session_key)
             text = (f"🆕 已清除当前目录的对话上下文：`{cwd}`\n"
@@ -1697,6 +2342,54 @@ class ConsumerSupervisor:
 
 
 # ---------------------------------------------------------------------------
+# Card click listener
+# ---------------------------------------------------------------------------
+
+class CardSupervisor(ConsumerSupervisor):
+    """Listen for ``card.action.trigger`` and resume the matching ask."""
+
+    def _start(self) -> subprocess.Popen[str]:
+        args = self.cfg.lark_args("event", "consume",
+                                  "card.action.trigger", "--as", "bot")
+        return subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+            env=self.cfg.feishu_env(),
+        )
+
+    def run(self) -> None:
+        logging.info("启动飞书卡片事件监听")
+        super().run()
+
+    def handle(self, payload: dict[str, Any]) -> None:
+        action = parse_card_action(payload)
+        if action is None:
+            logging.debug("忽略无法解析的卡片事件")
+            return
+        if action["operator_id"] != self.cfg.owner_id:
+            logging.warning("忽略非主人卡片点击 by=%s", action["operator_id"])
+            return
+        ask = self.state.get_ask(action["ask_id"])
+        if ask is None or ask.get("state") != "open":
+            logging.debug("忽略已处理的卡片点击 ask=%s", action["ask_id"])
+            return
+        options = [str(x) for x in (ask.get("options") or [])]
+        choice = action["choice"]
+        if not 0 <= choice < len(options):
+            logging.warning("忽略越界卡片选项 ask=%s choice=%s", ask["id"], choice)
+            return
+        if self._resume_after_answer(
+            ask, choice, options[choice], action["operator_id"]
+        ):
+            logging.info("卡片回答已继续 ask=%s choice=%s", ask["id"], choice)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1715,6 +2408,8 @@ def cmd_check(cfg: Config) -> int:
         ),
         "task_timeout": cfg.task_timeout,
         "group_mode": cfg.group_mode,
+        "quiet": cfg.quiet,
+        "card_actions": cfg.card_actions,
         "lark_cli_bin": shutil.which(cfg.lark_cli_bin) or cfg.lark_cli_bin,
         "lark_profile": cfg.lark_profile or "(default)",
         "paper_home": str(cfg.paper_home),
@@ -1864,6 +2559,41 @@ def cmd_check(cfg: Config) -> int:
                 checks["event_bus"] = "unknown"
         except Exception as exc:  # noqa: BLE001
             checks["event_bus"] = f"error: {exc}"
+
+    if cfg.card_actions:
+        try:
+            proc = subprocess.run(
+                cfg.lark_args("event", "consume", "card.action.trigger",
+                              "--as", "bot", "--dry-run"),
+                capture_output=True, text=True, timeout=30, env=cfg.feishu_env(),
+            )
+            payload = json.loads(proc.stdout) if proc.stdout.strip() else {}
+            decision = (payload.get("data") or {}).get("decision") or {}
+            blocked = [
+                item for item in (decision.get("preconditions") or [])
+                if item.get("status") == "blocked"
+            ]
+            if payload.get("ok") and not blocked:
+                checks["card_actions_status"] = "ok"
+            else:
+                checks["card_actions_status"] = "blocked"
+                detail = "; ".join(
+                    part for item in blocked for part in (
+                        str(item.get("detail") or ""),
+                        str(item.get("hint") or ""),
+                    ) if part
+                ) or "; ".join(
+                    str(item.get("name") or "") for item in blocked
+                )
+                warnings.append(
+                    "卡片按钮事件 card.action.trigger 尚未订阅，按钮点击不会回调；"
+                    "可继续用 /answer 回答。"
+                    + (f"（{clip(detail, 240)}）" if detail else "")
+                )
+        except Exception as exc:  # noqa: BLE001
+            checks["card_actions_status"] = f"error: {exc}"
+            warnings.append(f"检查卡片按钮事件失败: {exc}")
+
     checks["problems"] = problems
     checks["warnings"] = warnings
     checks["ok"] = not problems
@@ -1890,6 +2620,41 @@ def read_pid(cfg: Config) -> int | None:
         return None
 
 
+def terminate_process_group(pid: int) -> None:
+    """Terminate a process group left by a previous bridge process."""
+    if not pid:
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
+    except OSError:
+        return
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            return
+        except OSError:
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
 def pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
@@ -1898,6 +2663,27 @@ def pid_alive(pid: int | None) -> bool:
         return True
     except OSError:
         return False
+
+
+def agent_process_alive(cfg: Config, pid: int) -> bool:
+    """Whether ``pid`` still looks like this instance's agent, not a reused pid."""
+    if not pid_alive(pid):
+        return False
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    command = (proc.stdout or "").strip()
+    if not command:
+        return False
+    names = {
+        Path(str(cfg.codex_bin)).name,
+        {"codex": "codex", "omp": "omp", "claude": "claude"}.get(cfg.agent_kind, ""),
+    }
+    return any(name and name in command for name in names)
 
 
 def cmd_run(cfg: Config, console: bool) -> int:
@@ -1910,7 +2696,9 @@ def cmd_run(cfg: Config, console: bool) -> int:
         return 1
     cfg.pid_path.write_text(str(os.getpid()), encoding="utf-8")
     state = State(cfg.db_path)
-    recovered = state.recover_running()
+    recovered = state.recover_running(
+        alive=lambda pid: agent_process_alive(cfg, pid)
+    )
     if recovered:
         logging.warning("发现 %s 个上次中断的任务，已重新排队", recovered)
     state.cleanup_seen()
@@ -1929,6 +2717,10 @@ def cmd_run(cfg: Config, console: bool) -> int:
     pool = WorkerPool(cfg, state, feishu, runner, stop_event, papers)
     supervisor = ConsumerSupervisor(cfg, state, feishu, pool, stop_event,
                                     papers, scheduler)
+    card_supervisor: CardSupervisor | None = None
+    if cfg.card_actions:
+        card_supervisor = CardSupervisor(cfg, state, feishu, pool, stop_event,
+                                         papers, scheduler)
 
     def shutdown(signum: int, _frame: Any) -> None:
         logging.info("收到信号 %s，准备退出", signum)
@@ -1948,6 +2740,12 @@ def cmd_run(cfg: Config, console: bool) -> int:
     pool.start()
     if scheduler is not None:
         scheduler.start()
+    card_thread: threading.Thread | None = None
+    if card_supervisor is not None:
+        card_thread = threading.Thread(
+            target=card_supervisor.run, name="card-supervisor", daemon=True
+        )
+        card_thread.start()
     try:
         supervisor.run()
     finally:
@@ -1955,6 +2753,10 @@ def cmd_run(cfg: Config, console: bool) -> int:
         # Stream cleanup happens in ConsumerSupervisor.run's finally block.
         stop_event.set()
         pool.cancel_all()
+        if card_supervisor is not None:
+            card_supervisor.stop()
+        if card_thread is not None:
+            card_thread.join(timeout=5)
         pool.join(timeout=10)
         if scheduler is not None:
             scheduler.join(timeout=5)

@@ -455,10 +455,20 @@ class FakeFeishu:
     def __init__(self):
         self.sent: list[tuple[str, str]] = []
         self.calls: list[dict] = []
+        self.cards: list[tuple[str, dict]] = []
+        self.card_updates: list[tuple[str, dict]] = []
 
     def send(self, chat_id, text, **kwargs):
         self.sent.append((chat_id, text))
         self.calls.append({"chat_id": chat_id, "text": text, **kwargs})
+        return True
+
+    def send_card(self, chat_id, card, idempotency_key=""):
+        self.cards.append((chat_id, card))
+        return True, f"om_card_{len(self.cards)}", ""
+
+    def update_card(self, message_id, card):
+        self.card_updates.append((message_id, card))
         return True
 
 
@@ -619,9 +629,331 @@ class CheckTests(unittest.TestCase):
         self.assertIn("事件总线已被其他机器占用", problem)
         self.assertIn("online_instance_cnt=1", problem)
 
+    def test_unsubscribed_card_callbacks_are_a_warning(self):
+        code, report = self.run_check(FAKE_BUS_STATE="free", FAKE_CARD_STATE="blocked")
+        self.assertEqual(report["card_actions_status"], "blocked")
+        self.assertTrue(report["ok"])
+        self.assertEqual(code, 0)
+        warning = " ".join(report["warnings"])
+        self.assertIn("card.action.trigger", warning)
+        self.assertIn("callbacks not subscribed", warning)
+        self.assertIn("clientID=cli_test", warning)
+
     def test_local_bridge_suppresses_probe(self):
         self.cfg.pid_path.write_text(str(os.getpid()), encoding="utf-8")
         code, report = self.run_check(FAKE_BUS_STATE="occupied")
         self.assertEqual(report["event_bus"], "held_by_local_bridge")
         self.assertTrue(report["ok"])
         self.assertEqual(code, 0)
+
+
+class AskProtocolTests(unittest.TestCase):
+    def test_valid_ask_is_split_from_prose(self):
+        payload = {
+            "ask": [{
+                "title": "要写笔记吗？",
+                "text": "这篇论文值得精读吗？",
+                "options": ["写精读笔记", "只给结论"],
+                "recommend": 0,
+                "about": "用户要求速读",
+                "key": "note",
+            }]
+        }
+        raw = "先看结论。\n\n```lark-bot\n" + json.dumps(payload, ensure_ascii=False) + "\n```"
+        text, ask, error = bridge.parse_agent_reply(raw)
+        self.assertEqual(error, "")
+        self.assertNotIn("lark-bot", text)
+        self.assertEqual(text, "先看结论。")
+        self.assertEqual(ask["title"], "要写笔记吗？")
+        self.assertEqual(ask["options"], ["写精读笔记", "只给结论"])
+        self.assertEqual(ask["recommend"], 0)
+        self.assertEqual(ask["key"], "note")
+
+    def test_malformed_json_keeps_prose(self):
+        raw = "正文\n```lark-bot\n{not json}\n```"
+        text, ask, error = bridge.parse_agent_reply(raw)
+        self.assertIsNone(ask)
+        self.assertEqual(text, "正文")
+        self.assertIn("JSON", error)
+
+    def test_ask_requires_title_and_options(self):
+        raw = '```lark-bot\n{"ask": {"title": "只有标题"}}\n```'
+        _, ask, error = bridge.parse_agent_reply(raw)
+        self.assertIsNone(ask)
+        self.assertIn("options", error)
+
+    def test_recommend_out_of_range_is_dropped(self):
+        raw = json.dumps({"ask": {"title": "t", "options": ["a"], "recommend": 9}})
+        _, ask, _ = bridge.parse_agent_reply("```lark-bot\n" + raw + "\n```")
+        self.assertIsNone(ask["recommend"])
+
+    def test_only_one_ask_is_kept(self):
+        payload = {"ask": [
+            {"title": "一", "options": ["a"]},
+            {"title": "二", "options": ["b"]},
+        ]}
+        _, ask, warning = bridge.parse_agent_reply(
+            "```lark-bot\n" + json.dumps(payload, ensure_ascii=False) + "\n```"
+        )
+        self.assertEqual(ask["title"], "一")
+        self.assertIn("一次只处理一个", warning)
+
+    def test_parse_card_action_variants(self):
+        direct = bridge.parse_card_action({
+            "action_value": {"ask": 7, "choice": 1},
+            "operator_id": "ou_owner",
+            "message_id": "om_card",
+        })
+        self.assertEqual(direct, {
+            "ask_id": 7, "choice": 1,
+            "operator_id": "ou_owner", "message_id": "om_card",
+        })
+        nested = bridge.parse_card_action({
+            "action": {"value": json.dumps({"ask": "3", "choice": "0"})},
+            "operator": {"open_id": "ou_owner"},
+            "context": {"open_message_id": "om_nested"},
+        })
+        self.assertEqual(nested["ask_id"], 3)
+        self.assertEqual(nested["operator_id"], "ou_owner")
+        self.assertEqual(nested["message_id"], "om_nested")
+        self.assertIsNone(bridge.parse_card_action({"action_value": "not json"}))
+        self.assertIsNone(bridge.parse_card_action({"action_value": {"ask": "x"}}))
+
+    def test_render_ask_card_has_buttons_and_answer_hint(self):
+        card = bridge.render_ask_card({
+            "id": 5, "title": "选一个", "text": "正文",
+            "options": ["甲", "乙"], "recommend": 1,
+        })
+        actions = next(e for e in card["elements"] if e["tag"] == "action")
+        self.assertEqual(len(actions["actions"]), 2)
+        self.assertEqual(
+            actions["actions"][0]["value"], {"ask": 5, "choice": 0}
+        )
+        self.assertIn("（推荐）", actions["actions"][1]["text"]["content"])
+        note = card["elements"][-1]
+        self.assertIn("/answer 5", note["elements"][0]["content"])
+
+
+class TaskEventTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = bridge.State(Path(self.tmp.name) / "state.db")
+
+    def tearDown(self):
+        self.state.close()
+        self.tmp.cleanup()
+
+    def test_lifecycle_events_are_recorded_in_order(self):
+        task_id = self.state.enqueue("om_e", "oc_e", "oc_e", "hello", "{}", "/tmp")
+        self.state.next_task()
+        self.state.set_task_pid(task_id, 12345)
+        self.state.finish_task(task_id, "done", "ok")
+        types = [e["type"] for e in self.state.task_events(task_id)]
+        self.assertEqual(
+            types, ["queued", "started", "process", "finished:done"]
+        )
+        process = self.state.task_events(task_id)[2]
+        self.assertEqual(process["data"]["pid"], 12345)
+
+    def test_requeue_records_previous_failure(self):
+        task_id = self.state.enqueue("om_r", "oc_r", "oc_r", "hello", "{}", "/tmp")
+        self.state.next_task()
+        self.state.finish_task(task_id, "failed", "", "boom")
+        again = self.state.requeue_task(
+            "om_r", "oc_r", "oc_r", "retry", "{}", "/tmp"
+        )
+        self.assertEqual(again, task_id)
+        event = self.state.task_events(task_id)[-1]
+        self.assertEqual(event["type"], "requeued")
+        self.assertEqual(event["data"]["previous_status"], "failed")
+        self.assertEqual(event["data"]["previous_error"], "boom")
+
+    def test_recover_running_kills_orphan_and_requeues(self):
+        task_id = self.state.enqueue("om_o", "oc_o", "oc_o", "hello", "{}", "/tmp")
+        self.state.next_task()
+        self.state.set_task_pid(task_id, 999999)
+        killed: list[int] = []
+        count = self.state.recover_running(
+            alive=lambda pid: True, terminate=killed.append
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(killed, [999999])
+        self.assertEqual(self.state.next_task()["id"], task_id)
+        event = next(
+            e for e in self.state.task_events(task_id) if e["type"] == "recovered"
+        )
+        self.assertTrue(event["data"]["orphan_killed"])
+
+    def test_recover_running_skips_dead_pid(self):
+        task_id = self.state.enqueue("om_d", "oc_d", "oc_d", "hello", "{}", "/tmp")
+        self.state.next_task()
+        self.state.set_task_pid(task_id, 999999)
+        called: list[int] = []
+        self.state.recover_running(
+            alive=lambda pid: False, terminate=called.append
+        )
+        self.assertEqual(called, [])
+        event = next(
+            e for e in self.state.task_events(task_id) if e["type"] == "recovered"
+        )
+        self.assertFalse(event["data"]["orphan_killed"])
+
+    def test_ask_lifecycle_is_atomic(self):
+        ask_id = self.state.create_ask(
+            1, "oc_a", "oc_a\x1f/tmp", "/tmp", "选一个", "正文",
+            ["甲", "乙"], 0, "背景", "key",
+        )
+        self.assertEqual([a["id"] for a in self.state.open_asks("oc_a")], [ask_id])
+        answered = self.state.answer_ask(ask_id, 1, "乙", "ou_owner")
+        self.assertEqual(answered["state"], "answered")
+        self.assertEqual(answered["choice"], 1)
+        self.assertIsNone(self.state.answer_ask(ask_id, 0, "甲", "ou_owner"))
+        self.assertEqual(self.state.open_asks("oc_a"), [])
+
+
+class FakeRunner:
+    def __init__(self, result):
+        self.result = result
+
+    def run(self, task, ev, text, cancel_event, on_progress=None):
+        return self.result
+
+
+class WorkerAskTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.cfg = make_cfg(self.root)
+        self.state = bridge.State(self.cfg.db_path)
+        self.feishu = FakeFeishu()
+
+    def tearDown(self):
+        self.state.close()
+        self.tmp.cleanup()
+
+    def make_task(self, text="做点事"):
+        task_id = self.state.enqueue(
+            "om_w", "oc_test", "oc_test", text, "{}", str(self.cfg.workdir)
+        )
+        return self.state.next_task()
+
+    def test_agent_ask_becomes_waiting_task_and_card(self):
+        payload = {"ask": {"title": "继续吗？", "options": ["继续", "停止"]}}
+        reply = "先问你。\n```lark-bot\n" + json.dumps(payload, ensure_ascii=False) + "\n```"
+        worker = bridge.Worker(
+            0, self.cfg, self.state, self.feishu,
+            FakeRunner(bridge.CodexResult(ok=True, text=reply)),
+            threading.Event(),
+        )
+        task = self.make_task()
+        worker._process(task)
+
+        self.assertEqual(self.state.status_summary()["tasks"].get("waiting"), 1)
+        asks = self.state.open_asks("oc_test")
+        self.assertEqual(len(asks), 1)
+        self.assertEqual(asks[0]["card_message_id"], "om_card_1")
+        self.assertEqual(len(self.feishu.cards), 1)
+        self.assertIn(("oc_test", "先问你。"), self.feishu.sent)
+        self.assertFalse(any("lark-bot" in text for _, text in self.feishu.sent))
+
+    def test_answer_command_resumes_original_session(self):
+        session_key = "oc_test\x1f" + str(self.cfg.workdir)
+        ask_id = self.state.create_ask(
+            1, "oc_test", session_key, str(self.cfg.workdir),
+            "继续吗？", "", ["继续", "停止"], 0,
+        )
+        self.state.set_ask_card(ask_id, "om_card_9")
+        supervisor = bridge.ConsumerSupervisor(
+            self.cfg, self.state, self.feishu, FakePool(), threading.Event()
+        )
+        reply = supervisor._handle_answer_command(
+            f"{ask_id} 2", make_event(message_id="om_answer")
+        )
+        self.assertIn("已记录", reply)
+        self.assertEqual(self.state.get_ask(ask_id)["state"], "answered")
+        task = self.state.next_task()
+        self.assertEqual(task["session_key"], session_key)
+        self.assertIn("停止", task["prompt"])
+        self.assertIn("不要重复已经完成的步骤", task["prompt"])
+        self.assertEqual(len(self.feishu.card_updates), 1)
+        self.assertEqual(self.feishu.card_updates[0][0], "om_card_9")
+
+    def test_non_owner_cannot_answer(self):
+        ask_id = self.state.create_ask(
+            1, "oc_test", "oc_test", "", "t", "", ["a"], None,
+        )
+        supervisor = bridge.ConsumerSupervisor(
+            self.cfg, self.state, self.feishu, FakePool(), threading.Event()
+        )
+        reply = supervisor._handle_answer_command(
+            f"{ask_id} 1", make_event(sender_id="ou_other")
+        )
+        self.assertIn("只有主人", reply)
+        self.assertEqual(self.state.get_ask(ask_id)["state"], "open")
+
+    def test_card_supervisor_ignores_stale_and_foreign_clicks(self):
+        ask_id = self.state.create_ask(
+            1, "oc_test", "oc_test", "", "t", "", ["a", "b"], None,
+        )
+        supervisor = bridge.CardSupervisor(
+            self.cfg, self.state, self.feishu, FakePool(), threading.Event()
+        )
+        supervisor.handle({
+            "action_value": {"ask": ask_id, "choice": 0},
+            "operator_id": "ou_other",
+        })
+        self.assertEqual(self.state.get_ask(ask_id)["state"], "open")
+        supervisor.handle({
+            "action_value": {"ask": ask_id, "choice": 0},
+            "operator_id": "ou_owner",
+        })
+        self.assertEqual(self.state.get_ask(ask_id)["state"], "answered")
+        supervisor.handle({
+            "action_value": {"ask": ask_id, "choice": 1},
+            "operator_id": "ou_owner",
+        })
+        self.assertEqual(self.state.get_ask(ask_id)["choice"], 0)
+
+
+class QuietConfigTests(unittest.TestCase):
+    def test_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.env").write_text(
+                "OWNER_ID=ou_owner\n", encoding="utf-8"
+            )
+            cfg = bridge.load_config(root)
+        self.assertFalse(cfg.quiet)
+        self.assertTrue(cfg.card_actions)
+
+    def test_env_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.env").write_text(
+                "OWNER_ID=ou_owner\nQUIET=1\nCARD_ACTIONS=0\n", encoding="utf-8"
+            )
+            cfg = bridge.load_config(root)
+        self.assertTrue(cfg.quiet)
+        self.assertFalse(cfg.card_actions)
+
+
+class RecoverySafetyTests(unittest.TestCase):
+    def test_reused_pid_is_not_treated_as_the_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(Path(tmp))
+            cfg.agent_kind = "claude"
+            cfg.codex_bin = "/opt/claude"
+            with mock.patch("bridge.pid_alive", return_value=True):
+                with mock.patch("bridge.subprocess.run") as run:
+                    run.return_value = mock.Mock(
+                        stdout="/opt/claude -p --output-format stream-json\n"
+                    )
+                    self.assertTrue(bridge.agent_process_alive(cfg, 123))
+                    run.return_value = mock.Mock(stdout="/bin/sleep 600\n")
+                    self.assertFalse(bridge.agent_process_alive(cfg, 123))
+
+    def test_dead_pid_is_not_alive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(Path(tmp))
+            with mock.patch("bridge.pid_alive", return_value=False):
+                self.assertFalse(bridge.agent_process_alive(cfg, 123))

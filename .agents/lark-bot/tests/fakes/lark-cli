@@ -10,6 +10,18 @@ case "${1:-}" in
 JSON
         ;;
     event)
+        if [[ " $* " == *" --dry-run "* ]]; then
+            if [ "${FAKE_CARD_STATE:-ok}" = "blocked" ]; then
+                cat <<'JSON'
+{"ok": true, "data": {"decision": {"event_key": "card.action.trigger", "status": "blocked", "preconditions": [{"name": "console_event_published", "status": "blocked", "detail": "callbacks not subscribed", "hint": "https://open.feishu.cn/page/launcher?clientID=cli_test"}]}}}
+JSON
+            else
+                cat <<'JSON'
+{"ok": true, "data": {"decision": {"event_key": "card.action.trigger", "preconditions": [{"name": "credentials_available", "status": "ok"}]}}}
+JSON
+            fi
+            exit 0
+        fi
         if [ "${FAKE_BUS_STATE:-free}" = "occupied" ]; then
             cat <<'JSON' >&2
 [event] consuming as cli_test (cli_test)
